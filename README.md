@@ -35,7 +35,7 @@ docker compose up --build -d
 | Backend    | http://localhost:9070 |
 | Bridge HTTP| http://localhost:8081 |
 | TCP equipos| `host:9910`       |
-| MongoDB    | localhost:27017   |
+| MongoDB    | localhost:29017   |
 
 ## Uso del monitor
 
