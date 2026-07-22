@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TEST_4G — Monitor TCP 9910</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg"></div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="brand-mark">TEST_4G</span>
+      <span class="brand-sub">Monitor TCP · Puerto 9910</span>
+    </div>
+    <div class="status-row">
+      <span id="wsDot" class="dot off" title="WebSocket"></span>
+      <span id="wsLabel">WS…</span>
+      <button type="button" id="btnSweep" class="btn ghost" title="Limpiar IPs huérfanas">Limpiar huérfanas</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel devices">
+      <div class="panel-head">
+        <h2>Dispositivos</h2>
+        <span id="devCount" class="badge">0</span>
+      </div>
+      <ul id="deviceList" class="device-list"></ul>
+      <p id="emptyDevices" class="empty">Ningún equipo conectado</p>
+    </aside>
+
+    <section class="panel monitor">
+      <div class="panel-head">
+        <h2 id="monitorTitle">Terminal</h2>
+        <div class="view-toggle">
+          <button type="button" class="seg active" data-view="both">Ambos</button>
+          <button type="button" class="seg" data-view="text">String</button>
+          <button type="button" class="seg" data-view="hex">Hex</button>
+        </div>
+        <button type="button" id="btnClear" class="btn ghost">Limpiar</button>
+      </div>
+      <div id="term" class="term" aria-live="polite"></div>
+
+      <form id="sendForm" class="send-bar">
+        <select id="encoding" aria-label="Codificación">
+          <option value="string">String</option>
+          <option value="hex">Hexadecimal</option>
+        </select>
+        <input id="message" type="text" placeholder="Mensaje a enviar… (hex: 48656C6C6F)" autocomplete="off" />
+        <label class="chk">
+          <input type="checkbox" id="addCrLf" checked />
+          +CRLF
+        </label>
+        <button type="submit" class="btn primary" id="btnSend">Enviar</button>
+      </form>
+      <p id="sendHint" class="hint">Selecciona un dispositivo para enviar.</p>
+    </section>
+  </main>
+
+  <!-- Mismo origen vía nginx (/api, /ws). Override: <meta name="api-base" content="http://host:9070"> -->
+  <script src="app.js"></script>
+</body>
+</html>

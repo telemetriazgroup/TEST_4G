@@ -1,0 +1,60 @@
+services:
+  port_cleaner:
+    image: docker:27-cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./port_cleaner/clean.sh:/clean.sh:ro
+    entrypoint: ["/bin/sh", "/clean.sh"]
+    environment:
+      CLEAN_PORT: "9910"
+    restart: "no"
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "9070:9070"
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: test_4g
+      BRIDGE_URL: http://tcp_bridge:8081
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  tcp_bridge:
+    build: ./tcp_bridge
+    ports:
+      - "9910:9910"
+      - "8081:8081"
+    environment:
+      TCP_PORT: "9910"
+      HTTP_PORT: "8081"
+      BACKEND_URL: http://backend:9070
+      IDLE_TIMEOUT_S: "300"
+      ORPHAN_SWEEP_S: "30"
+      FORWARD_LEGACY: "0"
+    depends_on:
+      port_cleaner:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8087:8087"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
