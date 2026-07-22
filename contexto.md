@@ -10,7 +10,7 @@ Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha c
 |--------|----------|---------|
 | **9910** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
 | **8081** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
-| **9070** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
+| **9071** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
 | **8089** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
 | **29017** | `mongo` (host → 27017 contenedor) | Persistencia |
 

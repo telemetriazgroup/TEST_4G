@@ -33,7 +33,7 @@ from flask import Flask, jsonify, request
 HOST = os.getenv("TCP_HOST", "0.0.0.0")
 TCP_PORT = int(os.getenv("TCP_PORT", "9910"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8081"))
-BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:9070").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:9071").rstrip("/")
 
 # APIs legacy (compatibilidad con test_9910.py)
 API_URL = os.getenv("API_URL", "http://161.132.53.51:9050/TermoKing/")
