@@ -257,8 +257,41 @@ def notify_disconnect_all() -> None:
     _backend_post("/api/internal/disconnect_all", {})
 
 
-def notify_connect(addr: str, ip: str) -> None:
-    _backend_post("/api/internal/connect", {"addr": addr, "ip": ip})
+def build_tcp_header(
+    addr: tuple,
+    *,
+    payload_len: int = 0,
+    event: str = "data",
+) -> dict[str, Any]:
+    """Cabecera de conexión TCP a nivel aplicación (peer + puerto local)."""
+    return {
+        "event": event,
+        "protocol": "TCP",
+        "src_ip": addr[0],
+        "src_port": addr[1],
+        "dst_ip": HOST if HOST != "0.0.0.0" else "0.0.0.0",
+        "dst_port": TCP_PORT,
+        "payload_len": payload_len,
+        "family": "AF_INET",
+    }
+
+
+def bytes_to_decimal(raw: bytes) -> tuple[str, int | None]:
+    """
+    Convierte trama a decimal:
+    - decimal: bytes separados por espacio (ej. '10 255 0')
+    - decimal_int: entero big-endian si la trama tiene 1..8 bytes
+    """
+    decimal = " ".join(str(b) for b in raw)
+    decimal_int = int.from_bytes(raw, byteorder="big", signed=False) if 1 <= len(raw) <= 8 else None
+    return decimal, decimal_int
+
+
+def notify_connect(addr: str, ip: str, tcp_header: dict | None = None) -> None:
+    payload: dict[str, Any] = {"addr": addr, "ip": ip}
+    if tcp_header:
+        payload["tcp_header"] = tcp_header
+    _backend_post("/api/internal/connect", payload)
 
 
 def notify_data(
@@ -267,10 +300,13 @@ def notify_data(
     text: str,
     hex_str: str,
     *,
-    value_type: str = "string",
+    value_type: str = "hex",
     int_value: int | None = None,
+    decimal: str | None = None,
     direction: str = "rx",
     encoding: str | None = None,
+    tcp_header: dict | None = None,
+    frame_len: int | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "addr": addr,
@@ -283,8 +319,14 @@ def notify_data(
     }
     if int_value is not None:
         payload["int_value"] = int_value
+    if decimal is not None:
+        payload["decimal"] = decimal
     if encoding:
         payload["encoding"] = encoding
+    if tcp_header is not None:
+        payload["tcp_header"] = tcp_header
+    if frame_len is not None:
+        payload["frame_len"] = frame_len
     _backend_post("/api/internal/telemetry", payload)
 
 
@@ -351,10 +393,19 @@ def bytes_to_views(data: bytes) -> tuple[str, str]:
     return text, hex_str
 
 
+def looks_like_ascii_hex(text: str) -> bool:
+    cleaned = re.sub(r"[\s:]", "", text.strip())
+    return (
+        len(cleaned) >= 2
+        and len(cleaned) % 2 == 0
+        and re.fullmatch(r"[0-9A-Fa-f]+", cleaned) is not None
+    )
+
+
 def parse_chunks(line: str) -> dict[str, Any]:
     """
-    Interpreta una línea como JSON, int, hex o string.
-    value_type: "json" | "int" | "hex" | "string"
+    Los equipos envían tramas hexadecimales.
+    Prioridad: hex (ASCII o binario representado) → JSON → int → string.
     """
     raw = line.strip()
     result: dict[str, Any] = {
@@ -365,17 +416,50 @@ def parse_chunks(line: str) -> dict[str, Any]:
         "int_value": None,
         "hex": raw.encode("utf-8", errors="replace").hex(),
         "text": raw,
+        "payload_bytes": raw.encode("utf-8", errors="replace"),
     }
 
-    # JSON
+    # Hex ASCII (objetivo principal de los equipos)
+    hex_candidate = re.sub(r"[\s:]", "", raw)
+    if looks_like_ascii_hex(raw):
+        try:
+            decoded = binascii.unhexlify(hex_candidate)
+            decimal, decimal_int = bytes_to_decimal(decoded)
+            result.update(
+                {
+                    "kind": "hex",
+                    "value_type": "hex",
+                    "hex": hex_candidate.lower(),
+                    "text": decoded.decode("utf-8", errors="replace"),
+                    "payload_bytes": decoded,
+                    "decimal": decimal,
+                    "int_value": decimal_int,
+                }
+            )
+            return result
+        except (binascii.Error, ValueError):
+            pass
+
+    # JSON (compat)
     if "{" in raw and "}" in raw:
         try:
             start = raw.index("{")
             end = raw.rindex("}") + 1
             obj = json.loads(raw[start:end])
-            result["kind"] = "json"
-            result["value_type"] = "json"
-            result["json"] = obj
+            payload = raw[start:end].encode("utf-8")
+            decimal, decimal_int = bytes_to_decimal(payload)
+            result.update(
+                {
+                    "kind": "json",
+                    "value_type": "json",
+                    "json": obj,
+                    "hex": payload.hex(),
+                    "text": raw[start:end],
+                    "payload_bytes": payload,
+                    "decimal": decimal,
+                    "int_value": decimal_int,
+                }
+            )
             if isinstance(obj, dict):
                 imei = obj.get("IMEI") or obj.get("imei") or obj.get("id")
                 if imei:
@@ -384,41 +468,34 @@ def parse_chunks(line: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Entero decimal puro (antes que hex: "10" / "255" son int, no hex)
+    # Entero decimal puro
     if re.fullmatch(r"[+-]?\d+", raw):
         try:
             n = int(raw, 10)
-            result["kind"] = "int"
-            result["value_type"] = "int"
-            result["int_value"] = n
-            result["text"] = str(n)
+            payload = str(n).encode("utf-8")
+            decimal, _ = bytes_to_decimal(payload)
+            result.update(
+                {
+                    "kind": "int",
+                    "value_type": "int",
+                    "int_value": n,
+                    "text": str(n),
+                    "hex": payload.hex(),
+                    "payload_bytes": payload,
+                    "decimal": str(n),
+                }
+            )
             return result
         except ValueError:
             pass
 
-    # Hex: caracteres [0-9A-F], longitud par y al menos una letra A-F
-    # (si solo hay dígitos 0-9 ya se clasificó como int arriba)
-    hex_candidate = re.sub(r"[\s:]", "", raw)
-    if (
-        len(hex_candidate) >= 2
-        and len(hex_candidate) % 2 == 0
-        and re.fullmatch(r"[0-9A-Fa-f]+", hex_candidate)
-        and re.search(r"[A-Fa-f]", hex_candidate)
-    ):
-        try:
-            decoded = binascii.unhexlify(hex_candidate)
-            result["kind"] = "hex"
-            result["value_type"] = "hex"
-            result["hex"] = hex_candidate.lower()
-            result["text"] = decoded.decode("utf-8", errors="replace")
-            result["raw_bytes"] = decoded
-            decoded_txt = result["text"].strip()
-            if re.fullmatch(r"[+-]?\d+", decoded_txt):
-                result["int_value"] = int(decoded_txt, 10)
-            return result
-        except (binascii.Error, ValueError):
-            pass
-
+    # String: guardar igual en hex + decimal de sus bytes
+    payload = raw.encode("utf-8", errors="replace")
+    decimal, decimal_int = bytes_to_decimal(payload)
+    result["hex"] = payload.hex()
+    result["payload_bytes"] = payload
+    result["decimal"] = decimal
+    result["int_value"] = decimal_int
     return result
 
 
@@ -441,22 +518,49 @@ def forward_legacy_json(mensaje_json: dict, conn: socket.socket) -> None:
         log.warning("No se pudo devolver respuesta al cliente")
 
 
-def process_line(line: str, key: str, conn: socket.socket, ip: str) -> None:
-    parsed = parse_chunks(line)
-    if parsed.get("imei"):
-        set_imei(key, parsed["imei"])
+def process_frame(
+    payload: bytes,
+    key: str,
+    addr: tuple,
+    *,
+    ascii_hint: str | None = None,
+    conn: socket.socket | None = None,
+) -> None:
+    """Guarda trama completa en hex + decimal, con cabecera TCP."""
+    ip = addr[0]
+    header = build_tcp_header(addr, payload_len=len(payload), event="data")
 
-    text = parsed.get("text") or line
-    hex_str = parsed.get("hex") or line.encode("utf-8", errors="replace").hex()
-    value_type = parsed.get("value_type") or "string"
+    # Si llega como texto hex ASCII, usar parse_chunks; si es binario, hex directo
+    if ascii_hint is not None and looks_like_ascii_hex(ascii_hint):
+        parsed = parse_chunks(ascii_hint)
+        raw_bytes = parsed.get("payload_bytes") or payload
+        hex_str = parsed.get("hex") or raw_bytes.hex()
+        text = parsed.get("text") or ascii_hint
+        value_type = parsed.get("value_type") or "hex"
+        decimal = parsed.get("decimal")
+        int_value = parsed.get("int_value")
+        if parsed.get("imei"):
+            set_imei(key, parsed["imei"])
+        if FORWARD_LEGACY and parsed.get("json") is not None and conn is not None:
+            forward_legacy_json(parsed["json"], conn)
+    else:
+        raw_bytes = payload
+        hex_str = payload.hex()
+        text = payload.decode("utf-8", errors="replace")
+        value_type = "hex"
+        decimal, int_value = bytes_to_decimal(payload)
+
+    if decimal is None:
+        decimal, maybe_int = bytes_to_decimal(raw_bytes)
+        if int_value is None:
+            int_value = maybe_int
 
     log.info(
-        "RX [%s] type=%s text=%r hex=%s int=%s",
+        "RX [%s] hex=%s decimal=%s len=%d",
         key,
-        value_type,
-        text[:120],
-        hex_str[:64],
-        parsed.get("int_value"),
+        hex_str[:80],
+        (decimal or "")[:60],
+        len(raw_bytes),
     )
 
     notify_data(
@@ -465,12 +569,26 @@ def process_line(line: str, key: str, conn: socket.socket, ip: str) -> None:
         text,
         hex_str,
         value_type=value_type,
-        int_value=parsed.get("int_value"),
+        int_value=int_value,
+        decimal=decimal,
         direction="rx",
+        tcp_header=header,
+        frame_len=len(raw_bytes),
     )
 
-    if FORWARD_LEGACY and parsed.get("json") is not None:
-        forward_legacy_json(parsed["json"], conn)
+
+def process_line(line: str, key: str, conn: socket.socket, addr: tuple) -> None:
+    """Compat: línea de texto → trama (hex preferente)."""
+    if not line.strip():
+        return
+    if looks_like_ascii_hex(line):
+        try:
+            payload = binascii.unhexlify(re.sub(r"[\s:]", "", line.strip()))
+        except (binascii.Error, ValueError):
+            payload = line.encode("utf-8", errors="replace")
+    else:
+        payload = line.encode("utf-8", errors="replace")
+    process_frame(payload, key, addr, ascii_hint=line, conn=conn)
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +598,20 @@ def process_line(line: str, key: str, conn: socket.socket, ip: str) -> None:
 def handle_client(conn: socket.socket, addr: tuple) -> None:
     key = register_pending(addr, conn)
     ip = addr[0]
-    log.info("Cliente conectado: %s", key)
-    notify_connect(key, ip)
+    header = build_tcp_header(addr, payload_len=0, event="connect")
+    log.info("Cliente conectado: %s header=%s", key, header)
+    notify_connect(key, ip, tcp_header=header)
+    # Registrar cabecera TCP también como evento histórico
+    notify_data(
+        key,
+        ip,
+        text=f"CONNECT {ip}:{addr[1]} → {TCP_PORT}",
+        hex_str="",
+        value_type="tcp_header",
+        direction="rx",
+        tcp_header=header,
+        frame_len=0,
+    )
 
     buffer = ""
     try:
@@ -492,28 +622,53 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
                 break
 
             touch_rx(key)
-            text_chunk, hex_chunk = bytes_to_views(data)
-            # Log dual hex/string del chunk crudo
-            log.debug("chunk %s text=%r hex=%s", key, text_chunk[:80], hex_chunk[:80])
 
-            buffer += text_chunk
+            # Trama binaria: si no parece ASCII printable/hex, capturar chunk completo
+            try:
+                as_text = data.decode("utf-8")
+                is_text = as_text.isprintable() or any(c in as_text for c in "\r\n\t")
+            except UnicodeDecodeError:
+                as_text = ""
+                is_text = False
 
+            if not is_text:
+                # Trama binaria completa del recv
+                process_frame(data, key, addr, ascii_hint=None, conn=conn)
+                continue
+
+            buffer += as_text
             lines, buffer = split_lines(buffer)
             if not lines:
-                frames, buffer = maybe_sensor_frame(buffer)
-                lines = frames
-                if frames:
+                # Sin salto de línea: si es hex ASCII completo o trama sensor, procesar
+                if looks_like_ascii_hex(buffer) and len(buffer.strip()) >= 2:
+                    lines = [buffer.strip()]
                     buffer = ""
+                else:
+                    frames, buffer = maybe_sensor_frame(buffer)
+                    lines = frames
+                    if frames:
+                        buffer = ""
 
             for line in lines:
                 try:
-                    process_line(line, key, conn, ip)
+                    process_line(line, key, conn, addr)
                 except Exception as e:
                     log.exception("process_line %s: %s", key, e)
 
     except Exception as e:
         log.error("Error en %s: %s", key, e)
     finally:
+        # Evento disconnect con cabecera
+        notify_data(
+            key,
+            ip,
+            text=f"DISCONNECT {ip}:{addr[1]}",
+            hex_str="",
+            value_type="tcp_header",
+            direction="rx",
+            tcp_header=build_tcp_header(addr, payload_len=0, event="disconnect"),
+            frame_len=0,
+        )
         unregister(key, notify=True)
         log.info("Conexión cerrada: %s", key)
 
@@ -577,30 +732,40 @@ def send_to_device(
         return {"ok": False, "error": f"send falló: {e}"}
 
     text_view, hex_view = bytes_to_views(payload)
+    decimal, decimal_int = bytes_to_decimal(payload)
     enc = (encoding or "string").lower()
     value_type = "hex" if enc in ("hex", "hexadecimal") else ("int" if enc == "int" else "string")
-    int_value = None
+    int_value = decimal_int
     if value_type == "int":
         try:
             int_value = int(text_view.strip(), 10)
+            decimal = str(int_value)
         except ValueError:
             pass
 
+    peer = target_key.split(":")
+    peer_addr = (peer[0], int(peer[1])) if len(peer) == 2 and peer[1].isdigit() else (peer[0], 0)
+    header = build_tcp_header(peer_addr, payload_len=len(payload), event="tx")
+
     notify_data(
         target_key,
-        target_key.split(":")[0],
+        peer_addr[0],
         text_view,
         hex_view,
         value_type=value_type,
         int_value=int_value,
+        decimal=decimal,
         direction="tx",
         encoding=enc,
+        tcp_header=header,
+        frame_len=len(payload),
     )
     return {
         "ok": True,
         "addr": target_key,
         "bytes": len(payload),
         "hex": hex_view,
+        "decimal": decimal,
         "text": text_view,
         "value_type": value_type,
     }

@@ -79,3 +79,16 @@ Así se evita mostrar “30 conectados” cuando en realidad hay 2.
 ## Monitor web
 
 Interfaz en `:8089`: lista de dispositivos vivos, terminal RX/TX en string y/o hex, envío de comandos. Persistencia de mensajes en MongoDB.
+
+
+
+## Captura de tramas HEX
+
+Los dispositivos envían tramas en **hexadecimal**. El sistema:
+
+1. Guarda cada trama en MongoDB como `hex` (canónico) + `decimal` (bytes convertidos).
+2. Captura la **cabecera TCP** de aplicación: `src_ip`, `src_port`, `dst_port`, `payload_len`, evento connect/data/disconnect.
+3. Interfaz en dos módulos:
+   - **Serial en vivo**: flujo en tiempo real (WebSocket) con HEX y Decimal.
+   - **Histórico**: tramas persistidas consultables desde MongoDB.
+4. Botón **Actualizar serial** para refrescar lo recibido sin perder el histórico.

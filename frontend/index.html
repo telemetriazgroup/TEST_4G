@@ -15,14 +15,19 @@
   <header class="top">
     <div class="brand">
       <span class="brand-mark">TEST_4G</span>
-      <span class="brand-sub">Monitor TCP · Puerto 9910</span>
+      <span class="brand-sub">Monitor TCP · Tramas HEX · Puerto 9910</span>
     </div>
     <div class="status-row">
       <span id="wsDot" class="dot off" title="WebSocket"></span>
       <span id="wsLabel">WS…</span>
-      <button type="button" id="btnSweep" class="btn ghost" title="Limpiar IPs huérfanas">Limpiar huérfanas</button>
+      <button type="button" id="btnSweep" class="btn ghost">Limpiar huérfanas</button>
     </div>
   </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="serial" role="tab">Serial en vivo</button>
+    <button type="button" class="tab" data-tab="history" role="tab">Histórico</button>
+  </nav>
 
   <main class="layout">
     <aside class="panel devices">
@@ -34,62 +39,75 @@
       <p id="emptyDevices" class="empty">Ningún equipo conectado</p>
     </aside>
 
-    <section class="panel monitor">
+    <!-- SERIAL EN VIVO -->
+    <section class="panel monitor tab-panel active" id="panelSerial">
       <div class="panel-head">
-        <h2 id="monitorTitle">Capturas RX / TX</h2>
+        <h2 id="serialTitle">Serial en vivo</h2>
+        <button type="button" id="btnRefreshSerial" class="btn primary">Actualizar serial</button>
+        <button type="button" id="btnClearSerial" class="btn ghost">Limpiar vista</button>
+      </div>
+
+      <div id="serialTerm" class="term" aria-live="polite"></div>
+      <p id="emptySerial" class="empty show term-empty">Esperando tramas HEX…</p>
+
+      <form id="sendForm" class="send-bar">
+        <select id="encoding" aria-label="Codificación">
+          <option value="hex" selected>Hexadecimal</option>
+          <option value="string">String</option>
+          <option value="int">Int</option>
+        </select>
+        <input id="message" type="text" placeholder="Trama HEX… ej. AA55010A" autocomplete="off" />
+        <label class="chk">
+          <input type="checkbox" id="addCrLf" />
+          +CRLF
+        </label>
+        <button type="submit" class="btn primary">Enviar</button>
+      </form>
+      <p id="sendHint" class="hint">Selecciona un dispositivo para enviar.</p>
+    </section>
+
+    <!-- HISTÓRICO -->
+    <section class="panel monitor tab-panel" id="panelHistory">
+      <div class="panel-head">
+        <h2 id="historyTitle">Tramas históricas</h2>
         <div class="filters">
           <select id="filterDir" aria-label="Dirección">
             <option value="all">RX + TX</option>
             <option value="rx">Solo RX</option>
             <option value="tx">Solo TX</option>
           </select>
-          <select id="filterType" aria-label="Tipo de valor">
-            <option value="all">Todos los tipos</option>
+          <select id="filterType" aria-label="Tipo">
+            <option value="all">Todos</option>
             <option value="hex">HEX</option>
+            <option value="tcp_header">Cabecera TCP</option>
             <option value="string">String</option>
             <option value="int">Int</option>
-            <option value="json">JSON</option>
           </select>
         </div>
-        <button type="button" id="btnClear" class="btn ghost">Limpiar</button>
+        <button type="button" id="btnRefreshHistory" class="btn primary">Actualizar histórico</button>
       </div>
 
       <div class="capture-wrap">
-        <table class="capture-table" aria-label="Datos capturados">
+        <table class="capture-table" aria-label="Histórico de tramas">
           <thead>
             <tr>
               <th>Hora</th>
               <th>Dir</th>
               <th>Tipo</th>
-              <th>Valor</th>
               <th>HEX</th>
-              <th>Int</th>
+              <th>Decimal</th>
+              <th>Cabecera TCP</th>
               <th>Dispositivo</th>
             </tr>
           </thead>
-          <tbody id="captureBody"></tbody>
+          <tbody id="historyBody"></tbody>
         </table>
-        <p id="emptyCaptures" class="empty show">Sin capturas aún. Conecta un equipo al puerto 9910.</p>
+        <p id="emptyHistory" class="empty show">Sin histórico. Las tramas se guardan al recibirlas.</p>
       </div>
-
-      <form id="sendForm" class="send-bar">
-        <select id="encoding" aria-label="Codificación">
-          <option value="string">String</option>
-          <option value="hex">Hexadecimal</option>
-          <option value="int">Int</option>
-        </select>
-        <input id="message" type="text" placeholder="Mensaje… (string / hex / int)" autocomplete="off" />
-        <label class="chk">
-          <input type="checkbox" id="addCrLf" checked />
-          +CRLF
-        </label>
-        <button type="submit" class="btn primary" id="btnSend">Enviar</button>
-      </form>
-      <p id="sendHint" class="hint">Selecciona un dispositivo para enviar.</p>
+      <p id="historyMeta" class="hint">—</p>
     </section>
   </main>
 
-  <!-- Mismo origen vía nginx (/api, /ws). Override: <meta name="api-base" content="http://host:9081"> -->
   <script src="app.js"></script>
 </body>
 </html>

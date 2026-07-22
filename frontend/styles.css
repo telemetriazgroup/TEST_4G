@@ -80,12 +80,42 @@ html, body {
 .dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(31, 143, 78, 0.2); }
 .dot.off { background: var(--off); }
 
+.tabs {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0 1.5rem;
+  animation: rise 0.45s ease both;
+}
+
+.tab {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.9rem;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--muted);
+  padding: 0.5rem 1rem;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  border-bottom: none;
+  transition: background 0.15s, color 0.15s;
+}
+.tab:hover { color: var(--ink); }
+.tab.active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 -2px 0 var(--accent) inset;
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: flex; }
+
 .layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) 1fr;
   gap: 1rem;
-  padding: 0.75rem 1.5rem 1.5rem;
-  min-height: calc(100vh - 5.5rem);
+  padding: 0 1.5rem 1.5rem;
+  min-height: calc(100vh - 7rem);
   animation: rise 0.55s 0.08s ease both;
 }
 
@@ -160,7 +190,40 @@ html, body {
 }
 .empty.show { display: block; }
 
-.monitor { min-height: 420px; }
+.monitor { min-height: 420px; position: relative; }
+
+.term {
+  flex: 1;
+  margin: 0.75rem 1rem 0.35rem;
+  padding: 0.85rem 1rem;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow: auto;
+  min-height: 280px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.term-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4.5rem;
+  text-align: center;
+  color: #7a8a9a !important;
+  pointer-events: none;
+}
+
+.line { margin-bottom: 0.4rem; animation: fadein 0.2s ease; }
+.line .ts { color: #7a8a9a; }
+.line.rx .dir { color: #3dcfb0; }
+.line.tx .dir { color: #f0a06a; }
+.line .payload { color: var(--term-fg); }
+.line .hex-part { color: #9bb0c4; margin-right: 0.5rem; }
 
 .filters {
   display: flex;
@@ -243,6 +306,12 @@ html, body {
 .type-string { background: #e2ebe9; color: #0a5c54; }
 .type-int { background: #efe6d4; color: #6b4a12; }
 .type-json { background: #e8e0f0; color: #4a2d6b; }
+.type-tcp_header { background: #e4e4e4; color: #333; }
+
+.term .type-badge {
+  margin-right: 0.35rem;
+  font-size: 0.65rem;
+}
 
 .capture-wrap > .empty {
   position: absolute;

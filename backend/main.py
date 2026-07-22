@@ -50,8 +50,11 @@ class TelemetryBody(BaseModel):
     direction: str = "rx"
     text: str = ""
     hex: str = ""
-    value_type: str = "string"  # hex | string | int | json
+    decimal: str | None = None
+    value_type: str = "hex"  # hex | string | int | json | tcp_header
     int_value: int | None = None
+    frame_len: int | None = None
+    tcp_header: dict[str, Any] | None = None
     encoding: str | None = None
     ts: str | None = None
 
@@ -60,6 +63,7 @@ class ConnectBody(BaseModel):
     addr: str
     ip: str
     imei: str | None = None
+    tcp_header: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -115,19 +119,19 @@ async def disconnect_all():
 @app.post("/api/internal/connect")
 async def internal_connect(body: ConnectBody):
     now = _now()
+    set_doc: dict[str, Any] = {
+        "addr": body.addr,
+        "ip": body.ip,
+        "imei": body.imei,
+        "is_connected": True,
+        "connected_at": now,
+        "last_seen": now,
+    }
+    if body.tcp_header:
+        set_doc["tcp_header"] = body.tcp_header
     await db.devices.update_one(
         {"addr": body.addr},
-        {
-            "$set": {
-                "addr": body.addr,
-                "ip": body.ip,
-                "imei": body.imei,
-                "is_connected": True,
-                "connected_at": now,
-                "last_seen": now,
-            },
-            "$unset": {"disconnected_at": ""},
-        },
+        {"$set": set_doc, "$unset": {"disconnected_at": ""}},
         upsert=True,
     )
     # Limpiar otras entradas de la misma IP que quedaron huérfanas en DB
@@ -135,7 +139,14 @@ async def internal_connect(body: ConnectBody):
         {"ip": body.ip, "addr": {"$ne": body.addr}, "is_connected": True},
         {"$set": {"is_connected": False, "disconnected_at": now, "orphan": True}},
     )
-    await broadcast({"type": "connect", "addr": body.addr, "ip": body.ip})
+    await broadcast(
+        {
+            "type": "connect",
+            "addr": body.addr,
+            "ip": body.ip,
+            "tcp_header": body.tcp_header,
+        }
+    )
     return {"ok": True}
 
 
@@ -164,23 +175,29 @@ async def internal_telemetry(body: TelemetryBody):
         "direction": body.direction,
         "text": body.text,
         "hex": body.hex,
+        "decimal": body.decimal,
         "value_type": value_type,
         "int_value": body.int_value,
+        "frame_len": body.frame_len,
+        "tcp_header": body.tcp_header,
         "encoding": body.encoding,
         "ts": now,
     }
     await db.messages.insert_one(doc)
+    device_set: dict[str, Any] = {
+        "ip": body.ip,
+        "is_connected": True,
+        "last_seen": now,
+        "last_direction": body.direction,
+        "last_value_type": value_type,
+        "last_hex": body.hex,
+        "last_decimal": body.decimal,
+    }
+    if body.tcp_header:
+        device_set["tcp_header"] = body.tcp_header
     await db.devices.update_one(
         {"addr": body.addr},
-        {
-            "$set": {
-                "ip": body.ip,
-                "is_connected": True,
-                "last_seen": now,
-                "last_direction": body.direction,
-                "last_value_type": value_type,
-            }
-        },
+        {"$set": device_set},
         upsert=True,
     )
     # No enviar _id al WS
@@ -227,17 +244,52 @@ async def get_devices(connected_only: bool = True):
 
 
 @app.get("/api/messages")
-async def get_messages(addr: str | None = None, ip: str | None = None, limit: int = 200):
+async def get_messages(
+    addr: str | None = None,
+    ip: str | None = None,
+    limit: int = 200,
+    value_type: str | None = None,
+    direction: str | None = None,
+    exclude_headers: bool = False,
+):
+    """Mensajes recientes (serial / histórico)."""
     q: dict[str, Any] = {}
     if addr:
         q["addr"] = addr
     elif ip:
         q["ip"] = ip
-    limit = max(1, min(limit, 1000))
+    if value_type:
+        q["value_type"] = value_type
+    if direction:
+        q["direction"] = direction
+    if exclude_headers:
+        q["value_type"] = {"$ne": "tcp_header"}
+    limit = max(1, min(limit, 2000))
     cursor = db.messages.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
     rows = await cursor.to_list(limit)
     rows.reverse()
-    return {"messages": rows}
+    return {"messages": rows, "count": len(rows)}
+
+
+@app.get("/api/history")
+async def get_history(
+    addr: str | None = None,
+    ip: str | None = None,
+    limit: int = 500,
+    skip: int = 0,
+):
+    """Tramas históricas persistidas (hex + decimal + cabecera TCP)."""
+    q: dict[str, Any] = {}
+    if addr:
+        q["addr"] = addr
+    elif ip:
+        q["ip"] = ip
+    limit = max(1, min(limit, 2000))
+    skip = max(0, skip)
+    total = await db.messages.count_documents(q)
+    cursor = db.messages.find(q, {"_id": 0}).sort("ts", -1).skip(skip).limit(limit)
+    rows = await cursor.to_list(limit)
+    return {"messages": rows, "total": total, "skip": skip, "limit": limit}
 
 
 @app.post("/api/send")
