@@ -10,7 +10,7 @@ Dispositivo ──TCP:9910──► tcp_bridge ──HTTP──► backend ─�
                          HTTP:8081            WS + REST
                          (send/list)             │
                                                  ▼
-                                           frontend:8087
+                                           frontend:8089
 ```
 
 ## Cumple (contexto.md)
@@ -31,7 +31,7 @@ docker compose up --build -d
 
 | Servicio   | URL / puerto      |
 |------------|-------------------|
-| Frontend   | http://localhost:8087 |
+| Frontend   | http://localhost:8089 |
 | Backend    | http://localhost:9070 |
 | Bridge HTTP| http://localhost:8081 |
 | TCP equipos| `host:9910`       |
@@ -39,7 +39,7 @@ docker compose up --build -d
 
 ## Uso del monitor
 
-1. Abre http://localhost:8087
+1. Abre http://localhost:8089
 2. Los equipos que abran TCP a `:9910` aparecen en la lista (solo conexiones reales).
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.

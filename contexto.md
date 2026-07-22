@@ -11,7 +11,7 @@ Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha c
 | **9910** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
 | **8081** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
 | **9070** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
-| **8087** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
+| **8089** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
 | **27017** | `mongo` | Persistencia |
 
 El dispositivo **se conecta al servidor** por TCP 9910. No es el backend quien abre la conexión hacia el equipo.
@@ -78,4 +78,4 @@ Así se evita mostrar “30 conectados” cuando en realidad hay 2.
 
 ## Monitor web
 
-Interfaz en `:8087`: lista de dispositivos vivos, terminal RX/TX en string y/o hex, envío de comandos. Persistencia de mensajes en MongoDB.
+Interfaz en `:8089`: lista de dispositivos vivos, terminal RX/TX en string y/o hex, envío de comandos. Persistencia de mensajes en MongoDB.
