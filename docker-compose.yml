@@ -20,7 +20,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "9071:9071"
+      - "9081:9081"
     environment:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: test_4g
@@ -37,7 +37,7 @@ services:
     environment:
       TCP_PORT: "9910"
       HTTP_PORT: "8081"
-      BACKEND_URL: http://backend:9071
+      BACKEND_URL: http://backend:9081
       IDLE_TIMEOUT_S: "300"
       ORPHAN_SWEEP_S: "30"
       FORWARD_LEGACY: "0"

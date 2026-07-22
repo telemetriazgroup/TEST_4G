@@ -32,7 +32,7 @@ docker compose up --build -d
 | Servicio   | URL / puerto      |
 |------------|-------------------|
 | Frontend   | http://localhost:8089 |
-| Backend    | http://localhost:9071 |
+| Backend    | http://localhost:9081 |
 | Bridge HTTP| http://localhost:8081 |
 | TCP equipos| `host:9910`       |
 | MongoDB    | localhost:29017   |
@@ -51,12 +51,12 @@ docker compose up --build -d
 curl http://localhost:8081/devices
 
 # Enviar string
-curl -X POST http://localhost:9071/api/send \
+curl -X POST http://localhost:9081/api/send \
   -H 'Content-Type: application/json' \
   -d '{"ip":"1.2.3.4","message":"AT\r\n","encoding":"string"}'
 
 # Enviar hex
-curl -X POST http://localhost:9071/api/send \
+curl -X POST http://localhost:9081/api/send \
   -H 'Content-Type: application/json' \
   -d '{"addr":"1.2.3.4:54321","message":"48656C6C6F","encoding":"hex"}'
 ```
