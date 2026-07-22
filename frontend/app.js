@@ -1,5 +1,4 @@
 (() => {
-  // Por defecto mismo origen (nginx proxy /api y /ws). Override con meta api-base.
   const meta = document.querySelector('meta[name="api-base"]');
   const API = (meta && meta.content) || location.origin;
 
@@ -8,8 +7,9 @@
     wsLabel: document.getElementById("wsLabel"),
     deviceList: document.getElementById("deviceList"),
     emptyDevices: document.getElementById("emptyDevices"),
+    emptyCaptures: document.getElementById("emptyCaptures"),
     devCount: document.getElementById("devCount"),
-    term: document.getElementById("term"),
+    captureBody: document.getElementById("captureBody"),
     monitorTitle: document.getElementById("monitorTitle"),
     sendForm: document.getElementById("sendForm"),
     message: document.getElementById("message"),
@@ -18,10 +18,13 @@
     sendHint: document.getElementById("sendHint"),
     btnClear: document.getElementById("btnClear"),
     btnSweep: document.getElementById("btnSweep"),
+    filterDir: document.getElementById("filterDir"),
+    filterType: document.getElementById("filterType"),
   };
 
-  let selected = null; // { addr, ip }
-  let viewMode = "both"; // both | text | hex
+  let selected = null;
+  /** @type {Array<object>} */
+  let captures = [];
   let ws;
 
   function setWsState(ok) {
@@ -31,7 +34,7 @@
   }
 
   function esc(s) {
-    return String(s)
+    return String(s ?? "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
@@ -40,39 +43,92 @@
   function formatTs(ts) {
     try {
       const d = new Date(ts);
-      return d.toLocaleTimeString("es-PE", { hour12: false }) +
-        "." + String(d.getMilliseconds()).padStart(3, "0");
+      return (
+        d.toLocaleTimeString("es-PE", { hour12: false }) +
+        "." +
+        String(d.getMilliseconds()).padStart(3, "0")
+      );
     } catch {
       return ts || "";
     }
   }
 
-  function appendLine(msg) {
-    if (selected && msg.addr && msg.addr !== selected.addr) return;
+  function normalizeType(msg) {
+    let t = (msg.value_type || msg.encoding || "").toLowerCase();
+    if (t === "hexadecimal") t = "hex";
+    if (t === "text") t = "string";
+    if (!t || t === "utf-8") {
+      // Inferencia local si el mensaje es antiguo
+      const text = (msg.text || "").trim();
+      if (/^[+-]?\d+$/.test(text)) t = "int";
+      else if (/^[0-9a-fA-F]+$/.test((msg.hex || "").replace(/\s/g, "")) && /[a-fA-F]/.test(msg.hex || ""))
+        t = "hex";
+      else if (text.startsWith("{")) t = "json";
+      else t = "string";
+    }
+    return t;
+  }
 
+  function displayValue(msg, type) {
+    if (type === "int" && msg.int_value != null) return String(msg.int_value);
+    return msg.text ?? "";
+  }
+
+  function passesFilters(msg) {
     const dir = (msg.direction || "rx").toLowerCase();
-    const line = document.createElement("div");
-    line.className = `line ${dir}`;
+    const type = normalizeType(msg);
+    if (selected && msg.addr && msg.addr !== selected.addr) return false;
+    if (els.filterDir.value !== "all" && dir !== els.filterDir.value) return false;
+    if (els.filterType.value !== "all" && type !== els.filterType.value) return false;
+    return true;
+  }
 
-    const textPart = `<span class="payload text-part">${esc(msg.text || "")}</span>`;
-    const hexPart = `<span class="hex-part"> [${esc(msg.hex || "")}]</span>`;
+  function typeBadge(type) {
+    const label = type.toUpperCase();
+    return `<span class="type-badge type-${esc(type)}">${esc(label)}</span>`;
+  }
 
-    let payload = "";
-    if (viewMode === "text") payload = textPart;
-    else if (viewMode === "hex") payload = `<span class="hex-part">${esc(msg.hex || "")}</span>`;
-    else payload = textPart + hexPart;
+  function renderCaptures() {
+    const rows = captures.filter(passesFilters);
+    els.captureBody.innerHTML = "";
+    els.emptyCaptures.classList.toggle("show", rows.length === 0);
 
-    line.innerHTML =
-      `<span class="ts">${esc(formatTs(msg.ts))}</span> ` +
-      `<span class="dir">${dir.toUpperCase()}</span> ` +
-      payload;
+    for (const msg of rows) {
+      const dir = (msg.direction || "rx").toLowerCase();
+      const type = normalizeType(msg);
+      const tr = document.createElement("tr");
+      tr.className = `cap-${dir}`;
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(msg.ts))}</td>` +
+        `<td><span class="dir-badge dir-${dir}">${esc(dir.toUpperCase())}</span></td>` +
+        `<td>${typeBadge(type)}</td>` +
+        `<td class="mono val">${esc(displayValue(msg, type))}</td>` +
+        `<td class="mono hex">${esc(msg.hex || "")}</td>` +
+        `<td class="mono">${msg.int_value != null ? esc(msg.int_value) : "—"}</td>` +
+        `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
+      els.captureBody.appendChild(tr);
+    }
 
-    // Aplicar visibilidad de segmentos
-    if (viewMode === "text") line.querySelectorAll(".hex-part").forEach((n) => n.classList.add("hidden-view"));
-    if (viewMode === "hex") line.querySelectorAll(".text-part").forEach((n) => n.classList.add("hidden-view"));
+    const wrap = els.captureBody.closest(".capture-wrap");
+    if (wrap) wrap.scrollTop = wrap.scrollHeight;
+  }
 
-    els.term.appendChild(line);
-    els.term.scrollTop = els.term.scrollHeight;
+  function pushCapture(msg) {
+    if (!msg || msg.type === "hello") return;
+    // WS events tipados como message
+    const row = {
+      addr: msg.addr,
+      ip: msg.ip,
+      direction: msg.direction || "rx",
+      text: msg.text || "",
+      hex: msg.hex || "",
+      value_type: msg.value_type || msg.encoding || "string",
+      int_value: msg.int_value ?? null,
+      ts: msg.ts || new Date().toISOString(),
+    };
+    captures.push(row);
+    if (captures.length > 1000) captures = captures.slice(-800);
+    renderCaptures();
   }
 
   async function loadDevices() {
@@ -90,6 +146,13 @@
     els.devCount.textContent = String(devices.length);
     els.emptyDevices.classList.toggle("show", devices.length === 0);
 
+    // Opción "todos"
+    const all = document.createElement("li");
+    all.className = selected ? "" : "active";
+    all.innerHTML = `<div class="ip">Todos</div><div class="meta">Ver capturas de todos los equipos</div>`;
+    all.addEventListener("click", () => selectDevice(null));
+    els.deviceList.appendChild(all);
+
     for (const d of devices) {
       const li = document.createElement("li");
       li.dataset.addr = d.addr;
@@ -101,29 +164,43 @@
       els.deviceList.appendChild(li);
     }
 
-    // Si el seleccionado ya no está, limpiar selección
     if (selected && !devices.some((d) => d.addr === selected.addr)) {
       selected = null;
-      els.monitorTitle.textContent = "Terminal";
+      els.monitorTitle.textContent = "Capturas RX / TX";
       els.sendHint.textContent = "Selecciona un dispositivo para enviar.";
+      renderCaptures();
     }
   }
 
   async function selectDevice(d) {
-    selected = { addr: d.addr, ip: d.ip };
-    els.monitorTitle.textContent = `Terminal · ${d.addr}`;
-    els.sendHint.textContent = `Enviando a ${d.addr}`;
-    [...els.deviceList.children].forEach((li) => {
-      li.classList.toggle("active", li.dataset.addr === d.addr);
+    selected = d ? { addr: d.addr, ip: d.ip } : null;
+    els.monitorTitle.textContent = selected
+      ? `Capturas · ${selected.addr}`
+      : "Capturas RX / TX";
+    els.sendHint.textContent = selected
+      ? `Enviando a ${selected.addr}`
+      : "Selecciona un dispositivo para enviar.";
+
+    [...els.deviceList.children].forEach((li, i) => {
+      if (i === 0) li.classList.toggle("active", !selected);
+      else li.classList.toggle("active", selected && li.dataset.addr === selected.addr);
     });
-    els.term.innerHTML = "";
+
+    captures = [];
     try {
-      const r = await fetch(`${API}/api/messages?addr=${encodeURIComponent(d.addr)}&limit=300`);
+      const q = selected
+        ? `addr=${encodeURIComponent(selected.addr)}&limit=300`
+        : "limit=300";
+      const r = await fetch(`${API}/api/messages?${q}`);
       const data = await r.json();
-      for (const m of data.messages || []) appendLine(m);
+      captures = (data.messages || []).map((m) => ({
+        ...m,
+        value_type: m.value_type || m.encoding || "string",
+      }));
     } catch (e) {
       console.warn(e);
     }
+    renderCaptures();
   }
 
   function connectWs() {
@@ -139,8 +216,13 @@
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === "message") appendLine(msg);
-        if (msg.type === "connect" || msg.type === "disconnect" || msg.type === "disconnect_all" || msg.type === "sweep") {
+        if (msg.type === "message") pushCapture(msg);
+        if (
+          msg.type === "connect" ||
+          msg.type === "disconnect" ||
+          msg.type === "disconnect_all" ||
+          msg.type === "sweep"
+        ) {
           loadDevices();
         }
       } catch (_) {}
@@ -157,6 +239,10 @@
     if (!message) return;
     const encoding = els.encoding.value;
     if (encoding === "string" && els.addCrLf.checked) message += "\r\n";
+    if (encoding === "int" && !/^[+-]?\d+$/.test(message.trim())) {
+      els.sendHint.textContent = "Int requiere un número entero.";
+      return;
+    }
 
     try {
       const r = await fetch(`${API}/api/send`, {
@@ -174,14 +260,15 @@
         return;
       }
       els.message.value = "";
-      els.sendHint.textContent = `Enviado ${data.bytes} bytes → ${data.addr}`;
+      els.sendHint.textContent = `Enviado ${data.bytes} bytes (${data.value_type || encoding}) → ${data.addr}`;
     } catch (err) {
       els.sendHint.textContent = String(err);
     }
   });
 
   els.btnClear.addEventListener("click", () => {
-    els.term.innerHTML = "";
+    captures = [];
+    renderCaptures();
   });
 
   els.btnSweep.addEventListener("click", async () => {
@@ -197,30 +284,23 @@
     }
   });
 
-  document.querySelectorAll(".seg").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".seg").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      viewMode = btn.dataset.view;
-      // Re-aplicar a líneas existentes
-      els.term.querySelectorAll(".line").forEach((line) => {
-        const text = line.querySelector(".text-part");
-        const hex = line.querySelector(".hex-part");
-        if (viewMode === "both") {
-          text && text.classList.remove("hidden-view");
-          hex && hex.classList.remove("hidden-view");
-        } else if (viewMode === "text") {
-          text && text.classList.remove("hidden-view");
-          hex && hex.classList.add("hidden-view");
-        } else {
-          text && text.classList.add("hidden-view");
-          hex && hex.classList.remove("hidden-view");
-        }
-      });
-    });
+  els.filterDir.addEventListener("change", renderCaptures);
+  els.filterType.addEventListener("change", renderCaptures);
+
+  els.encoding.addEventListener("change", () => {
+    els.addCrLf.disabled = els.encoding.value !== "string";
+    if (els.encoding.value === "hex") {
+      els.message.placeholder = "Hex… ej. 48656C6C6F";
+    } else if (els.encoding.value === "int") {
+      els.message.placeholder = "Entero… ej. 42";
+      els.addCrLf.checked = false;
+    } else {
+      els.message.placeholder = "Mensaje string…";
+    }
   });
 
   connectWs();
   loadDevices();
+  selectDevice(null);
   setInterval(loadDevices, 10000);
 })();

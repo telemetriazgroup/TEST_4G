@@ -39,7 +39,7 @@ _ws_clients: set[WebSocket] = set()
 
 class SendBody(BaseModel):
     message: str
-    encoding: str = Field(default="string", description="string | hex")
+    encoding: str = Field(default="string", description="string | hex | int")
     addr: str | None = None
     ip: str | None = None
 
@@ -50,6 +50,8 @@ class TelemetryBody(BaseModel):
     direction: str = "rx"
     text: str = ""
     hex: str = ""
+    value_type: str = "string"  # hex | string | int | json
+    int_value: int | None = None
     encoding: str | None = None
     ts: str | None = None
 
@@ -153,12 +155,17 @@ async def internal_disconnect(body: dict):
 @app.post("/api/internal/telemetry")
 async def internal_telemetry(body: TelemetryBody):
     now = body.ts or _now()
+    value_type = (body.value_type or body.encoding or "string").lower()
+    if value_type in ("hexadecimal",):
+        value_type = "hex"
     doc = {
         "addr": body.addr,
         "ip": body.ip,
         "direction": body.direction,
         "text": body.text,
         "hex": body.hex,
+        "value_type": value_type,
+        "int_value": body.int_value,
         "encoding": body.encoding,
         "ts": now,
     }
@@ -171,6 +178,7 @@ async def internal_telemetry(body: TelemetryBody):
                 "is_connected": True,
                 "last_seen": now,
                 "last_direction": body.direction,
+                "last_value_type": value_type,
             }
         },
         upsert=True,

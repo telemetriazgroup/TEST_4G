@@ -36,22 +36,49 @@
 
     <section class="panel monitor">
       <div class="panel-head">
-        <h2 id="monitorTitle">Terminal</h2>
-        <div class="view-toggle">
-          <button type="button" class="seg active" data-view="both">Ambos</button>
-          <button type="button" class="seg" data-view="text">String</button>
-          <button type="button" class="seg" data-view="hex">Hex</button>
+        <h2 id="monitorTitle">Capturas RX / TX</h2>
+        <div class="filters">
+          <select id="filterDir" aria-label="Dirección">
+            <option value="all">RX + TX</option>
+            <option value="rx">Solo RX</option>
+            <option value="tx">Solo TX</option>
+          </select>
+          <select id="filterType" aria-label="Tipo de valor">
+            <option value="all">Todos los tipos</option>
+            <option value="hex">HEX</option>
+            <option value="string">String</option>
+            <option value="int">Int</option>
+            <option value="json">JSON</option>
+          </select>
         </div>
         <button type="button" id="btnClear" class="btn ghost">Limpiar</button>
       </div>
-      <div id="term" class="term" aria-live="polite"></div>
+
+      <div class="capture-wrap">
+        <table class="capture-table" aria-label="Datos capturados">
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Dir</th>
+              <th>Tipo</th>
+              <th>Valor</th>
+              <th>HEX</th>
+              <th>Int</th>
+              <th>Dispositivo</th>
+            </tr>
+          </thead>
+          <tbody id="captureBody"></tbody>
+        </table>
+        <p id="emptyCaptures" class="empty show">Sin capturas aún. Conecta un equipo al puerto 9910.</p>
+      </div>
 
       <form id="sendForm" class="send-bar">
         <select id="encoding" aria-label="Codificación">
           <option value="string">String</option>
           <option value="hex">Hexadecimal</option>
+          <option value="int">Int</option>
         </select>
-        <input id="message" type="text" placeholder="Mensaje a enviar… (hex: 48656C6C6F)" autocomplete="off" />
+        <input id="message" type="text" placeholder="Mensaje… (string / hex / int)" autocomplete="off" />
         <label class="chk">
           <input type="checkbox" id="addCrLf" checked />
           +CRLF

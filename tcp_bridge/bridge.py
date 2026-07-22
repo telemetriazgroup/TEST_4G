@@ -261,18 +261,31 @@ def notify_connect(addr: str, ip: str) -> None:
     _backend_post("/api/internal/connect", {"addr": addr, "ip": ip})
 
 
-def notify_data(addr: str, ip: str, text: str, hex_str: str, raw_b64: str | None = None) -> None:
-    _backend_post(
-        "/api/internal/telemetry",
-        {
-            "addr": addr,
-            "ip": ip,
-            "direction": "rx",
-            "text": text,
-            "hex": hex_str,
-            "ts": dt.datetime.utcnow().isoformat() + "Z",
-        },
-    )
+def notify_data(
+    addr: str,
+    ip: str,
+    text: str,
+    hex_str: str,
+    *,
+    value_type: str = "string",
+    int_value: int | None = None,
+    direction: str = "rx",
+    encoding: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "addr": addr,
+        "ip": ip,
+        "direction": direction,
+        "text": text,
+        "hex": hex_str,
+        "value_type": value_type,
+        "ts": dt.datetime.utcnow().isoformat() + "Z",
+    }
+    if int_value is not None:
+        payload["int_value"] = int_value
+    if encoding:
+        payload["encoding"] = encoding
+    _backend_post("/api/internal/telemetry", payload)
 
 
 # ---------------------------------------------------------------------------
@@ -340,14 +353,16 @@ def bytes_to_views(data: bytes) -> tuple[str, str]:
 
 def parse_chunks(line: str) -> dict[str, Any]:
     """
-    Interpreta una línea como JSON, hex puro o texto.
-    Conserva compatibilidad con el flujo JSON de test_9910.py.
+    Interpreta una línea como JSON, int, hex o string.
+    value_type: "json" | "int" | "hex" | "string"
     """
     raw = line.strip()
     result: dict[str, Any] = {
         "raw": raw,
-        "kind": "text",
+        "kind": "string",
+        "value_type": "string",
         "json": None,
+        "int_value": None,
         "hex": raw.encode("utf-8", errors="replace").hex(),
         "text": raw,
     }
@@ -359,6 +374,7 @@ def parse_chunks(line: str) -> dict[str, Any]:
             end = raw.rindex("}") + 1
             obj = json.loads(raw[start:end])
             result["kind"] = "json"
+            result["value_type"] = "json"
             result["json"] = obj
             if isinstance(obj, dict):
                 imei = obj.get("IMEI") or obj.get("imei") or obj.get("id")
@@ -368,17 +384,37 @@ def parse_chunks(line: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Hex puro (solo [0-9A-Fa-f], longitud par)
+    # Entero decimal puro (antes que hex: "10" / "255" son int, no hex)
+    if re.fullmatch(r"[+-]?\d+", raw):
+        try:
+            n = int(raw, 10)
+            result["kind"] = "int"
+            result["value_type"] = "int"
+            result["int_value"] = n
+            result["text"] = str(n)
+            return result
+        except ValueError:
+            pass
+
+    # Hex: caracteres [0-9A-F], longitud par y al menos una letra A-F
+    # (si solo hay dígitos 0-9 ya se clasificó como int arriba)
     hex_candidate = re.sub(r"[\s:]", "", raw)
-    if len(hex_candidate) >= 2 and len(hex_candidate) % 2 == 0 and re.fullmatch(
-        r"[0-9A-Fa-f]+", hex_candidate
+    if (
+        len(hex_candidate) >= 2
+        and len(hex_candidate) % 2 == 0
+        and re.fullmatch(r"[0-9A-Fa-f]+", hex_candidate)
+        and re.search(r"[A-Fa-f]", hex_candidate)
     ):
         try:
             decoded = binascii.unhexlify(hex_candidate)
             result["kind"] = "hex"
+            result["value_type"] = "hex"
             result["hex"] = hex_candidate.lower()
             result["text"] = decoded.decode("utf-8", errors="replace")
             result["raw_bytes"] = decoded
+            decoded_txt = result["text"].strip()
+            if re.fullmatch(r"[+-]?\d+", decoded_txt):
+                result["int_value"] = int(decoded_txt, 10)
             return result
         except (binascii.Error, ValueError):
             pass
@@ -412,10 +448,26 @@ def process_line(line: str, key: str, conn: socket.socket, ip: str) -> None:
 
     text = parsed.get("text") or line
     hex_str = parsed.get("hex") or line.encode("utf-8", errors="replace").hex()
+    value_type = parsed.get("value_type") or "string"
 
-    log.info("RX [%s] kind=%s text=%r hex=%s", key, parsed["kind"], text[:120], hex_str[:64])
+    log.info(
+        "RX [%s] type=%s text=%r hex=%s int=%s",
+        key,
+        value_type,
+        text[:120],
+        hex_str[:64],
+        parsed.get("int_value"),
+    )
 
-    notify_data(key, ip, text, hex_str)
+    notify_data(
+        key,
+        ip,
+        text,
+        hex_str,
+        value_type=value_type,
+        int_value=parsed.get("int_value"),
+        direction="rx",
+    )
 
     if FORWARD_LEGACY and parsed.get("json") is not None:
         forward_legacy_json(parsed["json"], conn)
@@ -490,6 +542,9 @@ def encode_payload(message: str, encoding: str) -> bytes:
         if len(cleaned) % 2 != 0:
             raise ValueError("Hex debe tener longitud par")
         return binascii.unhexlify(cleaned)
+    if encoding == "int":
+        n = int(str(message).strip(), 10)
+        return str(n).encode("utf-8")
     return message.encode("utf-8")
 
 
@@ -522,17 +577,24 @@ def send_to_device(
         return {"ok": False, "error": f"send falló: {e}"}
 
     text_view, hex_view = bytes_to_views(payload)
-    _backend_post(
-        "/api/internal/telemetry",
-        {
-            "addr": target_key,
-            "ip": target_key.split(":")[0],
-            "direction": "tx",
-            "text": text_view,
-            "hex": hex_view,
-            "encoding": encoding,
-            "ts": dt.datetime.utcnow().isoformat() + "Z",
-        },
+    enc = (encoding or "string").lower()
+    value_type = "hex" if enc in ("hex", "hexadecimal") else ("int" if enc == "int" else "string")
+    int_value = None
+    if value_type == "int":
+        try:
+            int_value = int(text_view.strip(), 10)
+        except ValueError:
+            pass
+
+    notify_data(
+        target_key,
+        target_key.split(":")[0],
+        text_view,
+        hex_view,
+        value_type=value_type,
+        int_value=int_value,
+        direction="tx",
+        encoding=enc,
     )
     return {
         "ok": True,
@@ -540,6 +602,7 @@ def send_to_device(
         "bytes": len(payload),
         "hex": hex_view,
         "text": text_view,
+        "value_type": value_type,
     }
 
 
