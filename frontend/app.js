@@ -1,6 +1,7 @@
 (() => {
   const meta = document.querySelector('meta[name="api-base"]');
   const API = (meta && meta.content) || location.origin;
+  const LIVE_MAX = 100;
 
   const els = {
     wsDot: document.getElementById("wsDot"),
@@ -12,7 +13,8 @@
     devCount: document.getElementById("devCount"),
     serialTerm: document.getElementById("serialTerm"),
     serialTitle: document.getElementById("serialTitle"),
-    historyBody: document.getElementById("historyBody"),
+    serialCount: document.getElementById("serialCount"),
+    historyHours: document.getElementById("historyHours"),
     historyTitle: document.getElementById("historyTitle"),
     historyMeta: document.getElementById("historyMeta"),
     sendForm: document.getElementById("sendForm"),
@@ -23,22 +25,26 @@
     btnSweep: document.getElementById("btnSweep"),
     btnRefreshSerial: document.getElementById("btnRefreshSerial"),
     btnClearSerial: document.getElementById("btnClearSerial"),
+    btnExportSerial: document.getElementById("btnExportSerial"),
     btnRefreshHistory: document.getElementById("btnRefreshHistory"),
     filterDir: document.getElementById("filterDir"),
     filterType: document.getElementById("filterType"),
     serialView: document.getElementById("serialView"),
     historyView: document.getElementById("historyView"),
+    exportFormat: document.getElementById("exportFormat"),
     panelSerial: document.getElementById("panelSerial"),
     panelHistory: document.getElementById("panelHistory"),
   };
 
-  let selected = null;
-  /** @type {Array<object>} live buffer (serial) */
+  let selected = null; // { addr, ip, port }
+  /** @type {Array<object>} */
   let live = [];
-  /** @type {Array<object>} history rows */
+  /** @type {Array<object>} */
   let history = [];
   let activeTab = "serial";
   let ws;
+  /** horas expandidas en histórico */
+  const openHours = new Set();
 
   function setWsState(ok) {
     els.wsDot.classList.toggle("on", ok);
@@ -82,7 +88,6 @@
   function decimalOf(msg) {
     if (msg.decimal != null && msg.decimal !== "") return String(msg.decimal);
     if (msg.int_value != null) return String(msg.int_value);
-    // fallback: convertir hex a decimales por byte
     const hex = (msg.hex || "").replace(/[\s:]/g, "");
     if (hex.length >= 2 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
       const bytes = [];
@@ -94,7 +99,6 @@
     return "—";
   }
 
-  /** Convierte hex (p.ej. 48656C6C6F) a ASCII legible. */
   function hexToAscii(hexRaw) {
     const hex = String(hexRaw || "").replace(/[\s:]/g, "");
     if (!hex || hex.length < 2 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
@@ -103,7 +107,6 @@
     let out = "";
     for (let i = 0; i < hex.length; i += 2) {
       const code = parseInt(hex.slice(i, i + 2), 16);
-      // ASCII imprimible 0x20–0x7E; resto como punto
       out += code >= 0x20 && code <= 0x7e ? String.fromCharCode(code) : ".";
     }
     return out;
@@ -113,7 +116,6 @@
     const fromHex = hexToAscii(msg.hex);
     if (fromHex) return fromHex;
     if (msg.text != null && msg.text !== "" && normalizeType(msg) !== "tcp_header") {
-      // Si no hay hex válido, mostrar text filtrado a ASCII
       return String(msg.text).replace(/[^\x20-\x7E]/g, ".");
     }
     return "—";
@@ -134,6 +136,39 @@
     return (els.historyView && els.historyView.value) || "both";
   }
 
+  /** Clave de hora local: YYYY-MM-DD HH:00 */
+  function hourKey(ts) {
+    try {
+      const d = new Date(ts);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const h = String(d.getHours()).padStart(2, "0");
+      return `${y}-${m}-${day} ${h}:00`;
+    } catch {
+      return "desconocida";
+    }
+  }
+
+  function parseAddr(addr) {
+    if (!addr) return { ip: null, port: null };
+    const i = addr.lastIndexOf(":");
+    if (i < 0) return { ip: addr, port: null };
+    return { ip: addr.slice(0, i), port: Number(addr.slice(i + 1)) || addr.slice(i + 1) };
+  }
+
+  function liveRows() {
+    const rows = selected
+      ? live.filter((m) => !m.addr || m.addr === selected.addr)
+      : live;
+    return rows.slice(-LIVE_MAX);
+  }
+
+  function updateSerialCount() {
+    const n = liveRows().length;
+    if (els.serialCount) els.serialCount.textContent = `${n} / ${LIVE_MAX}`;
+  }
+
   // ---- Tabs ----
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -145,15 +180,10 @@
     });
   });
 
-  // ---- Serial en vivo ----
-  function appendSerialLine(msg) {
-    if (selected && msg.addr && msg.addr !== selected.addr) return;
-
+  // ---- Serial en vivo (máx 100) ----
+  function buildSerialLineHtml(msg) {
     const dir = (msg.direction || "rx").toLowerCase();
     const type = normalizeType(msg);
-    const line = document.createElement("div");
-    line.className = `line ${dir}`;
-
     const hex = msg.hex || "";
     const ascii = asciiOf(msg);
     const dec = decimalOf(msg);
@@ -161,46 +191,66 @@
     const view = serialViewMode();
 
     if (type === "tcp_header") {
-      line.innerHTML =
+      return (
         `<span class="ts">${esc(formatTs(msg.ts))}</span> ` +
         `<span class="dir">HDR</span> ` +
-        `<span class="payload">${esc(msg.text || hdr)}</span>`;
-    } else {
-      const parts = [
-        `<span class="ts">${esc(formatTs(msg.ts))}</span>`,
-        `<span class="dir">${esc(dir.toUpperCase())}</span>`,
-        `<span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span>`,
-      ];
-      if (view === "hex" || view === "both" || view === "all") {
-        parts.push(`<span class="hex-part">HEX ${esc(hex || "—")}</span>`);
-      }
-      if (view === "ascii" || view === "both" || view === "all") {
-        parts.push(`<span class="ascii-part">ASCII ${esc(ascii)}</span>`);
-      }
-      if (view === "all") {
-        parts.push(`<span class="payload">DEC ${esc(dec)}</span>`);
-      }
-      line.innerHTML = parts.join(" ");
+        `<span class="payload">${esc(msg.text || hdr)}</span>`
+      );
     }
+    const parts = [
+      `<span class="ts">${esc(formatTs(msg.ts))}</span>`,
+      `<span class="dir">${esc(dir.toUpperCase())}</span>`,
+      `<span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span>`,
+    ];
+    if (view === "hex" || view === "both" || view === "all") {
+      parts.push(`<span class="hex-part">HEX ${esc(hex || "—")}</span>`);
+    }
+    if (view === "ascii" || view === "both" || view === "all") {
+      parts.push(`<span class="ascii-part">ASCII ${esc(ascii)}</span>`);
+    }
+    if (view === "all") {
+      parts.push(`<span class="payload">DEC ${esc(dec)}</span>`);
+    }
+    return parts.join(" ");
+  }
 
+  function appendSerialLine(msg) {
+    if (selected && msg.addr && msg.addr !== selected.addr) return;
+    const dir = (msg.direction || "rx").toLowerCase();
+    const line = document.createElement("div");
+    line.className = `line ${dir}`;
+    line.innerHTML = buildSerialLineHtml(msg);
     els.serialTerm.appendChild(line);
+
+    // Mantener solo LIVE_MAX nodos visibles
+    while (els.serialTerm.children.length > LIVE_MAX) {
+      els.serialTerm.removeChild(els.serialTerm.firstChild);
+    }
     els.serialTerm.scrollTop = els.serialTerm.scrollHeight;
     els.emptySerial.classList.remove("show");
+    updateSerialCount();
   }
 
   function renderSerial() {
     els.serialTerm.innerHTML = "";
-    const rows = selected
-      ? live.filter((m) => !m.addr || m.addr === selected.addr)
-      : live;
+    const rows = liveRows();
     els.emptySerial.classList.toggle("show", rows.length === 0);
-    for (const m of rows) appendSerialLine(m);
+    for (const m of rows) {
+      const dir = (m.direction || "rx").toLowerCase();
+      const line = document.createElement("div");
+      line.className = `line ${dir}`;
+      line.innerHTML = buildSerialLineHtml(m);
+      els.serialTerm.appendChild(line);
+    }
+    els.serialTerm.scrollTop = els.serialTerm.scrollHeight;
+    updateSerialCount();
   }
 
   function pushLive(msg) {
     const row = {
       addr: msg.addr,
       ip: msg.ip,
+      session_id: msg.session_id || null,
       direction: msg.direction || "rx",
       text: msg.text || "",
       hex: msg.hex || "",
@@ -212,17 +262,15 @@
       ts: msg.ts || new Date().toISOString(),
     };
     live.push(row);
-    if (live.length > 400) live = live.slice(-300);
+    if (live.length > LIVE_MAX * 3) live = live.slice(-LIVE_MAX * 2);
 
     if (activeTab === "serial") {
       if (!selected || !row.addr || row.addr === selected.addr) {
         appendSerialLine(row);
+      } else {
+        updateSerialCount();
       }
     }
-    // también acumular en histórico en memoria
-    history.unshift(row);
-    if (history.length > 2000) history.length = 2000;
-    if (activeTab === "history") renderHistory();
   }
 
   async function refreshSerial() {
@@ -230,19 +278,75 @@
     try {
       await loadDevices();
       const q = selected
-        ? `addr=${encodeURIComponent(selected.addr)}&limit=150`
-        : "limit=150";
+        ? `addr=${encodeURIComponent(selected.addr)}&limit=${LIVE_MAX}`
+        : `limit=${LIVE_MAX}`;
       const r = await fetch(`${API}/api/messages?${q}`);
       const data = await r.json();
-      live = data.messages || [];
+      live = (data.messages || []).slice(-LIVE_MAX);
       renderSerial();
-      els.sendHint.textContent = `Serial actualizado · ${live.length} trama(s)`;
+      els.sendHint.textContent = `Serial · últimas ${liveRows().length} tramas (máx ${LIVE_MAX})`;
     } catch (e) {
       els.sendHint.textContent = String(e);
     }
   }
 
-  // ---- Histórico ----
+  // ---- Export JSON sesión IP:puerto ----
+  function exportFrame(msg, format) {
+    const base = {
+      ts: msg.ts,
+      direction: msg.direction || "rx",
+      value_type: normalizeType(msg),
+    };
+    if (format === "hex") return { ...base, hex: msg.hex || "" };
+    if (format === "decimal") return { ...base, decimal: decimalOf(msg) };
+    if (format === "ascii") return { ...base, ascii: asciiOf(msg) };
+    return {
+      ...base,
+      hex: msg.hex || "",
+      decimal: decimalOf(msg),
+      ascii: asciiOf(msg),
+      frame_len: msg.frame_len ?? null,
+      text: msg.text || "",
+    };
+  }
+
+  function exportSerialJson() {
+    if (!selected || !selected.addr) {
+      els.sendHint.textContent = "Selecciona un dispositivo (IP:puerto) para exportar.";
+      return;
+    }
+    const format = (els.exportFormat && els.exportFormat.value) || "all";
+    const { ip, port } = parseAddr(selected.addr);
+    const frames = live
+      .filter((m) => m.addr === selected.addr)
+      .slice(-LIVE_MAX)
+      .map((m) => exportFrame(m, format));
+
+    const payload = {
+      exported_at: new Date().toISOString(),
+      source: "serial_live",
+      format,
+      session: {
+        ip,
+        port,
+        addr: selected.addr,
+        session_id: selected.session_id || frames[0]?.session_id || null,
+      },
+      count: frames.length,
+      frames,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    const safeIp = String(ip || "ip").replace(/[^\w.-]/g, "_");
+    a.href = URL.createObjectURL(blob);
+    a.download = `serial_${safeIp}_${port || "port"}_${format}_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    els.sendHint.textContent = `Exportado ${frames.length} trama(s) · ${format} · ${selected.addr}`;
+  }
+
+  // ---- Histórico agrupado por hora ----
   function passesHistoryFilters(msg) {
     const dir = (msg.direction || "rx").toLowerCase();
     const type = normalizeType(msg);
@@ -252,42 +356,86 @@
     return true;
   }
 
+  function groupByHour(rows) {
+    const map = new Map();
+    for (const msg of rows) {
+      const key = hourKey(msg.ts);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(msg);
+    }
+    // horas más recientes primero
+    return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }
+
   function renderHistory() {
     const rows = history.filter(passesHistoryFilters);
-    els.historyBody.innerHTML = "";
+    els.historyHours.innerHTML = "";
     els.emptyHistory.classList.toggle("show", rows.length === 0);
-    els.historyMeta.textContent = `${rows.length} trama(s) mostradas · total cargado ${history.length}`;
 
+    const groups = groupByHour(rows);
     const view = historyViewMode();
     const showHex = view === "hex" || view === "both";
     const showAscii = view === "ascii" || view === "both";
 
-    // Toggle columnas del thead
-    document.querySelectorAll(".col-hex").forEach((el) => {
-      el.style.display = showHex ? "" : "none";
-    });
-    document.querySelectorAll(".col-ascii").forEach((el) => {
-      el.style.display = showAscii ? "" : "none";
-    });
+    els.historyMeta.textContent =
+      `${groups.length} hora(s) · ${rows.length} trama(s)` +
+      (selected ? ` · ${selected.addr}` : "");
 
-    for (const msg of rows) {
-      const dir = (msg.direction || "rx").toLowerCase();
-      const type = normalizeType(msg);
-      const isHdr = type === "tcp_header";
-      const hex = isHdr ? "—" : (msg.hex || "—");
-      const ascii = isHdr ? "—" : asciiOf(msg);
-      const tr = document.createElement("tr");
-      tr.className = `cap-${dir}`;
-      tr.innerHTML =
-        `<td class="mono">${esc(formatTs(msg.ts))}</td>` +
-        `<td><span class="dir-badge dir-${dir}">${esc(dir.toUpperCase())}</span></td>` +
-        `<td><span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span></td>` +
-        `<td class="mono hex col-hex" style="display:${showHex ? "" : "none"}">${esc(hex)}</td>` +
-        `<td class="mono ascii col-ascii" style="display:${showAscii ? "" : "none"}">${esc(ascii)}</td>` +
-        `<td class="mono val">${esc(isHdr ? "—" : decimalOf(msg))}</td>` +
-        `<td class="mono muted">${esc(formatHeader(msg.tcp_header))}</td>` +
-        `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
-      els.historyBody.appendChild(tr);
+    for (const [hour, msgs] of groups) {
+      const rx = msgs.filter((m) => (m.direction || "rx") === "rx").length;
+      const tx = msgs.filter((m) => m.direction === "tx").length;
+      const open = openHours.has(hour);
+
+      const section = document.createElement("details");
+      section.className = "hour-block";
+      section.open = open;
+      section.addEventListener("toggle", () => {
+        if (section.open) openHours.add(hour);
+        else openHours.delete(hour);
+      });
+
+      const summary = document.createElement("summary");
+      summary.innerHTML =
+        `<span class="hour-label">${esc(hour)}</span>` +
+        `<span class="hour-meta">${msgs.length} tramas · RX ${rx} · TX ${tx}</span>`;
+      section.appendChild(summary);
+
+      const table = document.createElement("table");
+      table.className = "capture-table";
+      table.innerHTML =
+        `<thead><tr>` +
+        `<th>Hora</th><th>Dir</th><th>Tipo</th>` +
+        (showHex ? `<th>HEX</th>` : "") +
+        (showAscii ? `<th>ASCII</th>` : "") +
+        `<th>Decimal</th><th>Dispositivo</th>` +
+        `</tr></thead>`;
+      const tbody = document.createElement("tbody");
+
+      // Orden cronológico dentro de la hora
+      const ordered = [...msgs].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+      for (const msg of ordered) {
+        const dir = (msg.direction || "rx").toLowerCase();
+        const type = normalizeType(msg);
+        const isHdr = type === "tcp_header";
+        const tr = document.createElement("tr");
+        tr.className = `cap-${dir}`;
+        tr.innerHTML =
+          `<td class="mono">${esc(formatTs(msg.ts))}</td>` +
+          `<td><span class="dir-badge dir-${dir}">${esc(dir.toUpperCase())}</span></td>` +
+          `<td><span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span></td>` +
+          (showHex
+            ? `<td class="mono hex">${esc(isHdr ? "—" : msg.hex || "—")}</td>`
+            : "") +
+          (showAscii
+            ? `<td class="mono ascii">${esc(isHdr ? "—" : asciiOf(msg))}</td>`
+            : "") +
+          `<td class="mono val">${esc(isHdr ? "—" : decimalOf(msg))}</td>` +
+          `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+      els.historyHours.appendChild(section);
     }
   }
 
@@ -295,13 +443,13 @@
     els.historyMeta.textContent = "Cargando histórico…";
     try {
       const q = selected
-        ? `addr=${encodeURIComponent(selected.addr)}&limit=500`
-        : "limit=500";
+        ? `addr=${encodeURIComponent(selected.addr)}&limit=2000`
+        : "limit=2000";
       const r = await fetch(`${API}/api/history?${q}`);
       const data = await r.json();
+      // API history viene más reciente primero; mantener así
       history = data.messages || [];
       renderHistory();
-      els.historyMeta.textContent = `Histórico · ${data.total ?? history.length} en DB · mostrando ${history.length}`;
     } catch (e) {
       els.historyMeta.textContent = String(e);
     }
@@ -325,7 +473,7 @@
 
     const all = document.createElement("li");
     all.className = selected ? "" : "active";
-    all.innerHTML = `<div class="ip">Todos</div><div class="meta">Ver todos los equipos</div>`;
+    all.innerHTML = `<div class="ip">Todos</div><div class="meta">Ver todos (serial limitado a 100)</div>`;
     all.addEventListener("click", () => selectDevice(null));
     els.deviceList.appendChild(all);
 
@@ -333,35 +481,42 @@
       const li = document.createElement("li");
       li.dataset.addr = d.addr;
       if (selected && selected.addr === d.addr) li.classList.add("active");
-      const hdr = d.tcp_header
-        ? `${d.tcp_header.src_ip}:${d.tcp_header.src_port}`
-        : d.addr;
+      const { ip, port } = parseAddr(d.addr);
       li.innerHTML =
-        `<div class="ip">${esc(d.ip || d.addr)}</div>` +
-        `<div class="meta">${esc(hdr)} · idle ${esc(d.idle_s ?? "—")}s</div>`;
+        `<div class="ip">${esc(ip || d.ip || d.addr)}</div>` +
+        `<div class="meta">puerto ${esc(port ?? "—")} · idle ${esc(d.idle_s ?? "—")}s` +
+        (d.session_id ? ` · ses ${esc(String(d.session_id).slice(0, 8))}` : "") +
+        `</div>`;
       li.addEventListener("click", () => selectDevice(d));
       els.deviceList.appendChild(li);
     }
 
     if (selected && !devices.some((d) => d.addr === selected.addr)) {
-      selected = null;
-      els.serialTitle.textContent = "Serial en vivo";
-      els.historyTitle.textContent = "Tramas históricas";
-      els.sendHint.textContent = "Selecciona un dispositivo para enviar.";
+      // Mantener selección histórica aunque se desconecte (para export/histórico)
     }
   }
 
   async function selectDevice(d) {
-    selected = d ? { addr: d.addr, ip: d.ip } : null;
+    if (!d) {
+      selected = null;
+    } else {
+      const { ip, port } = parseAddr(d.addr);
+      selected = {
+        addr: d.addr,
+        ip: d.ip || ip,
+        port,
+        session_id: d.session_id || null,
+      };
+    }
     els.serialTitle.textContent = selected
-      ? `Serial · ${selected.addr}`
+      ? `Serial · ${selected.ip}:${selected.port}`
       : "Serial en vivo";
     els.historyTitle.textContent = selected
-      ? `Histórico · ${selected.addr}`
-      : "Tramas históricas";
+      ? `Histórico · ${selected.ip}:${selected.port}`
+      : "Histórico por hora";
     els.sendHint.textContent = selected
-      ? `Enviando a ${selected.addr}`
-      : "Selecciona un dispositivo para enviar.";
+      ? `Sesión ${selected.addr} — envío / export JSON`
+      : "Selecciona un dispositivo (IP:puerto) para enviar o exportar.";
 
     [...els.deviceList.children].forEach((li, i) => {
       if (i === 0) li.classList.toggle("active", !selected);
@@ -370,7 +525,6 @@
 
     await refreshSerial();
     if (activeTab === "history") await loadHistory();
-    else renderHistory();
   }
 
   // ---- WS ----
@@ -425,26 +579,23 @@
         return;
       }
       els.message.value = "";
-      els.sendHint.textContent = `TX ${data.bytes} B · HEX ${data.hex} · DEC ${data.decimal || "—"}`;
+      els.sendHint.textContent = `TX ${data.bytes} B · HEX ${data.hex} · ${selected.addr}`;
     } catch (err) {
       els.sendHint.textContent = String(err);
     }
   });
 
   els.btnClearSerial.addEventListener("click", () => {
-    live = [];
+    live = selected ? live.filter((m) => m.addr !== selected.addr) : [];
     renderSerial();
   });
   els.btnRefreshSerial.addEventListener("click", refreshSerial);
+  els.btnExportSerial.addEventListener("click", exportSerialJson);
   els.btnRefreshHistory.addEventListener("click", loadHistory);
   els.filterDir.addEventListener("change", renderHistory);
   els.filterType.addEventListener("change", renderHistory);
-  if (els.serialView) {
-    els.serialView.addEventListener("change", renderSerial);
-  }
-  if (els.historyView) {
-    els.historyView.addEventListener("change", renderHistory);
-  }
+  if (els.serialView) els.serialView.addEventListener("change", renderSerial);
+  if (els.historyView) els.historyView.addEventListener("change", renderHistory);
 
   els.btnSweep.addEventListener("click", async () => {
     try {
@@ -458,7 +609,6 @@
   });
 
   els.encoding.addEventListener("change", () => {
-    els.addCrLf.disabled = false;
     if (els.encoding.value === "hex") {
       els.message.placeholder = "Trama HEX… ej. AA55010A";
     } else if (els.encoding.value === "int") {

@@ -43,6 +43,7 @@
     <section class="panel monitor tab-panel active" id="panelSerial">
       <div class="panel-head">
         <h2 id="serialTitle">Serial en vivo</h2>
+        <span id="serialCount" class="badge">0 / 100</span>
         <div class="filters">
           <select id="serialView" aria-label="Vista de datos">
             <option value="hex">Solo HEX</option>
@@ -50,13 +51,20 @@
             <option value="both" selected>HEX + ASCII</option>
             <option value="all">HEX + ASCII + Dec</option>
           </select>
+          <select id="exportFormat" aria-label="Formato exportación">
+            <option value="hex">Exportar HEX</option>
+            <option value="decimal">Exportar Decimal</option>
+            <option value="ascii">Exportar ASCII</option>
+            <option value="all" selected>Exportar todo</option>
+          </select>
         </div>
-        <button type="button" id="btnRefreshSerial" class="btn primary">Actualizar serial</button>
-        <button type="button" id="btnClearSerial" class="btn ghost">Limpiar vista</button>
+        <button type="button" id="btnExportSerial" class="btn primary">Exportar JSON</button>
+        <button type="button" id="btnRefreshSerial" class="btn ghost">Actualizar</button>
+        <button type="button" id="btnClearSerial" class="btn ghost">Limpiar</button>
       </div>
 
       <div id="serialTerm" class="term" aria-live="polite"></div>
-      <p id="emptySerial" class="empty show term-empty">Esperando tramas HEX…</p>
+      <p id="emptySerial" class="empty show term-empty">Últimas 100 tramas. Para más detalle ve al Histórico.</p>
 
       <form id="sendForm" class="send-bar">
         <select id="encoding" aria-label="Codificación">
@@ -71,13 +79,13 @@
         </label>
         <button type="submit" class="btn primary">Enviar</button>
       </form>
-      <p id="sendHint" class="hint">Selecciona un dispositivo para enviar.</p>
+      <p id="sendHint" class="hint">Selecciona un dispositivo (IP:puerto) para enviar o exportar.</p>
     </section>
 
-    <!-- HISTÓRICO -->
+    <!-- HISTÓRICO POR HORA -->
     <section class="panel monitor tab-panel" id="panelHistory">
       <div class="panel-head">
-        <h2 id="historyTitle">Tramas históricas</h2>
+        <h2 id="historyTitle">Histórico por hora</h2>
         <div class="filters">
           <select id="filterDir" aria-label="Dirección">
             <option value="all">RX + TX</option>
@@ -100,24 +108,8 @@
         <button type="button" id="btnRefreshHistory" class="btn primary">Actualizar histórico</button>
       </div>
 
-      <div class="capture-wrap">
-        <table class="capture-table" aria-label="Histórico de tramas">
-          <thead>
-            <tr>
-              <th>Hora</th>
-              <th>Dir</th>
-              <th>Tipo</th>
-              <th class="col-hex">HEX</th>
-              <th class="col-ascii">ASCII</th>
-              <th>Decimal</th>
-              <th>Cabecera TCP</th>
-              <th>Dispositivo</th>
-            </tr>
-          </thead>
-          <tbody id="historyBody"></tbody>
-        </table>
-        <p id="emptyHistory" class="empty show">Sin histórico. Las tramas se guardan al recibirlas.</p>
-      </div>
+      <div id="historyHours" class="hours-wrap"></div>
+      <p id="emptyHistory" class="empty show">Sin histórico. Las tramas se agrupan por hora (YYYY-MM-DD HH:00).</p>
       <p id="historyMeta" class="hint">—</p>
     </section>
   </main>

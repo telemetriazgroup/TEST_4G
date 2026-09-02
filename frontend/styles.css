@@ -248,16 +248,54 @@ html, body {
   color: var(--ink);
 }
 
-.capture-wrap {
+.hours-wrap {
   flex: 1;
   margin: 0.75rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
   overflow: auto;
   min-height: 280px;
-  background: #fff;
-  position: relative;
 }
+
+.hour-block {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 0.65rem;
+  overflow: hidden;
+}
+
+.hour-block > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  background: #eef3f7;
+  user-select: none;
+}
+
+.hour-block > summary::-webkit-details-marker { display: none; }
+.hour-block > summary::before {
+  content: "▸";
+  color: var(--muted);
+  margin-right: 0.45rem;
+}
+.hour-block[open] > summary::before { content: "▾"; }
+
+.hour-label { font-weight: 600; color: var(--ink); }
+.hour-meta { color: var(--muted); font-size: 0.75rem; }
+
+.hour-block .capture-table {
+  border-top: 1px solid var(--line);
+}
+
+.hour-block .capture-table thead th {
+  position: static;
+}
+
 
 .capture-table {
   width: 100%;
@@ -320,13 +358,11 @@ html, body {
   font-size: 0.65rem;
 }
 
-.capture-wrap > .empty {
-  position: absolute;
-  inset: 2.5rem 0 0;
-  margin: 0;
-  text-align: center;
-  pointer-events: none;
+.hours-wrap + .empty,
+#emptyHistory {
+  margin: 0 1rem;
 }
+
 
 .send-bar {
   display: flex;
