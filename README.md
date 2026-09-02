@@ -37,6 +37,23 @@ docker compose up --build -d
 | TCP equipos| `host:9910`       |
 | MongoDB    | localhost:29017   |
 
+### Persistencia (MongoDB `test_4g`)
+
+| Colección | Contenido |
+|-----------|-----------|
+| `sessions` | Sesión por **IP** (activa/histórica, rx_count, tx_count) |
+| `messages` | Cada trama RX/TX (hex, decimal, session_id, ip, addr) |
+| `devices` | Estado vivo por `ip:port` |
+
+```bash
+# Sesiones por IP
+curl 'http://localhost:9081/api/sessions?ip=1.2.3.4'
+# Mensajes de una IP
+curl 'http://localhost:9081/api/messages?ip=1.2.3.4&limit=100'
+# Histórico
+curl 'http://localhost:9081/api/history?ip=1.2.3.4'
+```
+
 ## Uso del monitor
 
 1. Abre http://localhost:8089

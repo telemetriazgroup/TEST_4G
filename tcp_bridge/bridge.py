@@ -34,6 +34,9 @@ HOST = os.getenv("TCP_HOST", "0.0.0.0")
 TCP_PORT = int(os.getenv("TCP_PORT", "9910"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8081"))
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:9081").rstrip("/")
+PENDING_FILE = os.getenv("PENDING_FILE", "/tmp/tcp_bridge_pending.jsonl")
+BACKEND_RETRIES = int(os.getenv("BACKEND_RETRIES", "3"))
+BACKEND_RETRY_SLEEP = float(os.getenv("BACKEND_RETRY_SLEEP", "0.4"))
 
 # APIs legacy (compatibilidad con test_9910.py)
 API_URL = os.getenv("API_URL", "http://161.132.53.51:9050/TermoKing/")
@@ -90,6 +93,7 @@ def register_pending(addr: tuple, conn: socket.socket) -> str:
             "last_rx": now,
             "imei": None,
             "alive": True,
+            "session_id": None,
         }
         _addrs_by_ip.setdefault(ip, set()).add(key)
     return key
@@ -128,6 +132,18 @@ def set_imei(key: str, imei: str) -> None:
             _conn_by_addr[key]["imei"] = imei
 
 
+def set_session_id(key: str, session_id: str | None) -> None:
+    with _lock:
+        if key in _conn_by_addr and session_id:
+            _conn_by_addr[key]["session_id"] = session_id
+
+
+def get_session_id(key: str) -> str | None:
+    with _lock:
+        m = _conn_by_addr.get(key)
+        return m.get("session_id") if m else None
+
+
 def list_connections() -> list[dict[str, Any]]:
     now = time.time()
     with _lock:
@@ -139,6 +155,7 @@ def list_connections() -> list[dict[str, Any]]:
                     "ip": m["ip"],
                     "port": m["port"],
                     "imei": m.get("imei"),
+                    "session_id": m.get("session_id"),
                     "connected_at": m["connected_at"],
                     "last_rx": m["last_rx"],
                     "idle_s": round(now - m["last_rx"], 1),
@@ -240,21 +257,86 @@ def orphan_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Backend HTTP helpers
+# Backend HTTP helpers (con reintentos + cola local)
 # ---------------------------------------------------------------------------
 
-def _backend_post(path: str, payload: dict, timeout: float = 5.0) -> Any:
-    url = f"{BACKEND_URL}{path}"
+_pending_lock = threading.Lock()
+
+
+def _enqueue_pending(path: str, payload: dict) -> None:
+    """Guarda payload fallido para reenviar luego (no se pierde RX/TX)."""
     try:
-        r = requests.post(url, json=payload, timeout=timeout)
-        return r.json() if r.content else None
+        line = json.dumps({"path": path, "payload": payload, "ts": time.time()}, ensure_ascii=False)
+        with _pending_lock:
+            with open(PENDING_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
     except Exception as e:
-        log.warning("Backend POST %s falló: %s", path, e)
-        return None
+        log.error("No se pudo encolar pendiente %s: %s", path, e)
+
+
+def _backend_post(path: str, payload: dict, timeout: float = 5.0, *, enqueue: bool = True) -> Any:
+    url = f"{BACKEND_URL}{path}"
+    last_err = None
+    for attempt in range(1, BACKEND_RETRIES + 1):
+        try:
+            r = requests.post(url, json=payload, timeout=timeout)
+            if r.status_code >= 400:
+                last_err = f"HTTP {r.status_code}: {r.text[:200]}"
+                log.warning("Backend POST %s intento %d: %s", path, attempt, last_err)
+            else:
+                return r.json() if r.content else {"ok": True}
+        except Exception as e:
+            last_err = e
+            log.warning("Backend POST %s intento %d falló: %s", path, attempt, e)
+        time.sleep(BACKEND_RETRY_SLEEP * attempt)
+
+    log.error("Backend POST %s agotó reintentos: %s", path, last_err)
+    if enqueue and path in ("/api/internal/telemetry", "/api/internal/connect"):
+        _enqueue_pending(path, payload)
+    return None
+
+
+def flush_pending_loop() -> None:
+    """Reenvía mensajes encolados cuando el backend vuelve a estar disponible."""
+    while True:
+        time.sleep(10)
+        try:
+            if not os.path.exists(PENDING_FILE):
+                continue
+            with _pending_lock:
+                with open(PENDING_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                if not lines:
+                    continue
+                remaining = []
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                        path = item["path"]
+                        payload = item["payload"]
+                        ok = _backend_post(path, payload, enqueue=False)
+                        if not ok:
+                            remaining.append(line)
+                    except Exception:
+                        remaining.append(line)
+                with open(PENDING_FILE, "w", encoding="utf-8") as f:
+                    for line in remaining:
+                        f.write(line + "\n")
+                if lines and len(remaining) < len(lines):
+                    log.info(
+                        "Cola pendiente: reenviados %d, quedan %d",
+                        len(lines) - len(remaining),
+                        len(remaining),
+                    )
+        except Exception as e:
+            log.warning("flush_pending: %s", e)
 
 
 def notify_disconnect_all() -> None:
-    _backend_post("/api/internal/disconnect_all", {})
+    _backend_post("/api/internal/disconnect_all", {}, enqueue=False)
 
 
 def build_tcp_header(
@@ -287,11 +369,14 @@ def bytes_to_decimal(raw: bytes) -> tuple[str, int | None]:
     return decimal, decimal_int
 
 
-def notify_connect(addr: str, ip: str, tcp_header: dict | None = None) -> None:
+def notify_connect(addr: str, ip: str, tcp_header: dict | None = None) -> str | None:
     payload: dict[str, Any] = {"addr": addr, "ip": ip}
     if tcp_header:
         payload["tcp_header"] = tcp_header
-    _backend_post("/api/internal/connect", payload)
+    resp = _backend_post("/api/internal/connect", payload)
+    if isinstance(resp, dict):
+        return resp.get("session_id")
+    return None
 
 
 def notify_data(
@@ -307,6 +392,7 @@ def notify_data(
     encoding: str | None = None,
     tcp_header: dict | None = None,
     frame_len: int | None = None,
+    session_id: str | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "addr": addr,
@@ -327,6 +413,8 @@ def notify_data(
         payload["tcp_header"] = tcp_header
     if frame_len is not None:
         payload["frame_len"] = frame_len
+    if session_id:
+        payload["session_id"] = session_id
     _backend_post("/api/internal/telemetry", payload)
 
 
@@ -574,6 +662,7 @@ def process_frame(
         direction="rx",
         tcp_header=header,
         frame_len=len(raw_bytes),
+        session_id=get_session_id(key),
     )
 
 
@@ -600,7 +689,8 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
     ip = addr[0]
     header = build_tcp_header(addr, payload_len=0, event="connect")
     log.info("Cliente conectado: %s header=%s", key, header)
-    notify_connect(key, ip, tcp_header=header)
+    session_id = notify_connect(key, ip, tcp_header=header)
+    set_session_id(key, session_id)
     # Registrar cabecera TCP también como evento histórico
     notify_data(
         key,
@@ -611,6 +701,7 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
         direction="rx",
         tcp_header=header,
         frame_len=0,
+        session_id=session_id or get_session_id(key),
     )
 
     buffer = ""
@@ -658,6 +749,7 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
     except Exception as e:
         log.error("Error en %s: %s", key, e)
     finally:
+        sid = get_session_id(key)
         # Evento disconnect con cabecera
         notify_data(
             key,
@@ -668,9 +760,10 @@ def handle_client(conn: socket.socket, addr: tuple) -> None:
             direction="rx",
             tcp_header=build_tcp_header(addr, payload_len=0, event="disconnect"),
             frame_len=0,
+            session_id=sid,
         )
         unregister(key, notify=True)
-        log.info("Conexión cerrada: %s", key)
+        log.info("Conexión cerrada: %s session=%s", key, sid)
 
 
 def tcp_server_loop() -> None:
@@ -759,6 +852,7 @@ def send_to_device(
         encoding=enc,
         tcp_header=header,
         frame_len=len(payload),
+        session_id=get_session_id(target_key),
     )
     return {
         "ok": True,
@@ -768,6 +862,7 @@ def send_to_device(
         "decimal": decimal,
         "text": text_view,
         "value_type": value_type,
+        "session_id": get_session_id(target_key),
     }
 
 
@@ -824,6 +919,7 @@ def run_http() -> None:
 def main() -> None:
     notify_disconnect_all()
     threading.Thread(target=orphan_loop, daemon=True).start()
+    threading.Thread(target=flush_pending_loop, daemon=True).start()
     threading.Thread(target=run_http, daemon=True).start()
     tcp_server_loop()
 
