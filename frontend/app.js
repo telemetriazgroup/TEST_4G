@@ -26,6 +26,8 @@
     btnRefreshHistory: document.getElementById("btnRefreshHistory"),
     filterDir: document.getElementById("filterDir"),
     filterType: document.getElementById("filterType"),
+    serialView: document.getElementById("serialView"),
+    historyView: document.getElementById("historyView"),
     panelSerial: document.getElementById("panelSerial"),
     panelHistory: document.getElementById("panelHistory"),
   };
@@ -92,11 +94,44 @@
     return "—";
   }
 
+  /** Convierte hex (p.ej. 48656C6C6F) a ASCII legible. */
+  function hexToAscii(hexRaw) {
+    const hex = String(hexRaw || "").replace(/[\s:]/g, "");
+    if (!hex || hex.length < 2 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+      return "";
+    }
+    let out = "";
+    for (let i = 0; i < hex.length; i += 2) {
+      const code = parseInt(hex.slice(i, i + 2), 16);
+      // ASCII imprimible 0x20–0x7E; resto como punto
+      out += code >= 0x20 && code <= 0x7e ? String.fromCharCode(code) : ".";
+    }
+    return out;
+  }
+
+  function asciiOf(msg) {
+    const fromHex = hexToAscii(msg.hex);
+    if (fromHex) return fromHex;
+    if (msg.text != null && msg.text !== "" && normalizeType(msg) !== "tcp_header") {
+      // Si no hay hex válido, mostrar text filtrado a ASCII
+      return String(msg.text).replace(/[^\x20-\x7E]/g, ".");
+    }
+    return "—";
+  }
+
   function normalizeType(msg) {
     let t = (msg.value_type || msg.encoding || "hex").toLowerCase();
     if (t === "hexadecimal") t = "hex";
     if (t === "text") t = "string";
     return t || "hex";
+  }
+
+  function serialViewMode() {
+    return (els.serialView && els.serialView.value) || "both";
+  }
+
+  function historyViewMode() {
+    return (els.historyView && els.historyView.value) || "both";
   }
 
   // ---- Tabs ----
@@ -113,9 +148,6 @@
   // ---- Serial en vivo ----
   function appendSerialLine(msg) {
     if (selected && msg.addr && msg.addr !== selected.addr) return;
-    if (normalizeType(msg) === "tcp_header") {
-      // cabeceras también en serial, con estilo distinto
-    }
 
     const dir = (msg.direction || "rx").toLowerCase();
     const type = normalizeType(msg);
@@ -123,8 +155,10 @@
     line.className = `line ${dir}`;
 
     const hex = msg.hex || "";
+    const ascii = asciiOf(msg);
     const dec = decimalOf(msg);
     const hdr = formatHeader(msg.tcp_header);
+    const view = serialViewMode();
 
     if (type === "tcp_header") {
       line.innerHTML =
@@ -132,12 +166,21 @@
         `<span class="dir">HDR</span> ` +
         `<span class="payload">${esc(msg.text || hdr)}</span>`;
     } else {
-      line.innerHTML =
-        `<span class="ts">${esc(formatTs(msg.ts))}</span> ` +
-        `<span class="dir">${esc(dir.toUpperCase())}</span> ` +
-        `<span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span> ` +
-        `<span class="hex-part">HEX ${esc(hex)}</span> ` +
-        `<span class="payload">DEC ${esc(dec)}</span>`;
+      const parts = [
+        `<span class="ts">${esc(formatTs(msg.ts))}</span>`,
+        `<span class="dir">${esc(dir.toUpperCase())}</span>`,
+        `<span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span>`,
+      ];
+      if (view === "hex" || view === "both" || view === "all") {
+        parts.push(`<span class="hex-part">HEX ${esc(hex || "—")}</span>`);
+      }
+      if (view === "ascii" || view === "both" || view === "all") {
+        parts.push(`<span class="ascii-part">ASCII ${esc(ascii)}</span>`);
+      }
+      if (view === "all") {
+        parts.push(`<span class="payload">DEC ${esc(dec)}</span>`);
+      }
+      line.innerHTML = parts.join(" ");
     }
 
     els.serialTerm.appendChild(line);
@@ -215,17 +258,33 @@
     els.emptyHistory.classList.toggle("show", rows.length === 0);
     els.historyMeta.textContent = `${rows.length} trama(s) mostradas · total cargado ${history.length}`;
 
+    const view = historyViewMode();
+    const showHex = view === "hex" || view === "both";
+    const showAscii = view === "ascii" || view === "both";
+
+    // Toggle columnas del thead
+    document.querySelectorAll(".col-hex").forEach((el) => {
+      el.style.display = showHex ? "" : "none";
+    });
+    document.querySelectorAll(".col-ascii").forEach((el) => {
+      el.style.display = showAscii ? "" : "none";
+    });
+
     for (const msg of rows) {
       const dir = (msg.direction || "rx").toLowerCase();
       const type = normalizeType(msg);
+      const isHdr = type === "tcp_header";
+      const hex = isHdr ? "—" : (msg.hex || "—");
+      const ascii = isHdr ? "—" : asciiOf(msg);
       const tr = document.createElement("tr");
       tr.className = `cap-${dir}`;
       tr.innerHTML =
         `<td class="mono">${esc(formatTs(msg.ts))}</td>` +
         `<td><span class="dir-badge dir-${dir}">${esc(dir.toUpperCase())}</span></td>` +
         `<td><span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span></td>` +
-        `<td class="mono hex">${esc(msg.hex || (type === "tcp_header" ? "—" : ""))}</td>` +
-        `<td class="mono val">${esc(type === "tcp_header" ? "—" : decimalOf(msg))}</td>` +
+        `<td class="mono hex col-hex" style="display:${showHex ? "" : "none"}">${esc(hex)}</td>` +
+        `<td class="mono ascii col-ascii" style="display:${showAscii ? "" : "none"}">${esc(ascii)}</td>` +
+        `<td class="mono val">${esc(isHdr ? "—" : decimalOf(msg))}</td>` +
         `<td class="mono muted">${esc(formatHeader(msg.tcp_header))}</td>` +
         `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
       els.historyBody.appendChild(tr);
@@ -380,6 +439,12 @@
   els.btnRefreshHistory.addEventListener("click", loadHistory);
   els.filterDir.addEventListener("change", renderHistory);
   els.filterType.addEventListener("change", renderHistory);
+  if (els.serialView) {
+    els.serialView.addEventListener("change", renderSerial);
+  }
+  if (els.historyView) {
+    els.historyView.addEventListener("change", renderHistory);
+  }
 
   els.btnSweep.addEventListener("click", async () => {
     try {

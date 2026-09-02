@@ -43,6 +43,14 @@
     <section class="panel monitor tab-panel active" id="panelSerial">
       <div class="panel-head">
         <h2 id="serialTitle">Serial en vivo</h2>
+        <div class="filters">
+          <select id="serialView" aria-label="Vista de datos">
+            <option value="hex">Solo HEX</option>
+            <option value="ascii">Solo ASCII</option>
+            <option value="both" selected>HEX + ASCII</option>
+            <option value="all">HEX + ASCII + Dec</option>
+          </select>
+        </div>
         <button type="button" id="btnRefreshSerial" class="btn primary">Actualizar serial</button>
         <button type="button" id="btnClearSerial" class="btn ghost">Limpiar vista</button>
       </div>
@@ -83,6 +91,11 @@
             <option value="string">String</option>
             <option value="int">Int</option>
           </select>
+          <select id="historyView" aria-label="Vista de datos">
+            <option value="hex">Columna HEX</option>
+            <option value="ascii">Columna ASCII</option>
+            <option value="both" selected>HEX + ASCII</option>
+          </select>
         </div>
         <button type="button" id="btnRefreshHistory" class="btn primary">Actualizar histórico</button>
       </div>
@@ -94,7 +107,8 @@
               <th>Hora</th>
               <th>Dir</th>
               <th>Tipo</th>
-              <th>HEX</th>
+              <th class="col-hex">HEX</th>
+              <th class="col-ascii">ASCII</th>
               <th>Decimal</th>
               <th>Cabecera TCP</th>
               <th>Dispositivo</th>

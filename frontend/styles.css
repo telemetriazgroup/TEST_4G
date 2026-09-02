@@ -224,6 +224,13 @@ html, body {
 .line.tx .dir { color: #f0a06a; }
 .line .payload { color: var(--term-fg); }
 .line .hex-part { color: #9bb0c4; margin-right: 0.5rem; }
+.line .ascii-part { color: #d4c27a; margin-right: 0.5rem; }
+
+.capture-table .ascii {
+  color: #5a4a20;
+  word-break: break-all;
+  max-width: 240px;
+}
 
 .filters {
   display: flex;
