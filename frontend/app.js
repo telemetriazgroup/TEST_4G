@@ -173,7 +173,11 @@
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       activeTab = btn.dataset.tab;
-      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".tab").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      });
       els.panelSerial.classList.toggle("active", activeTab === "serial");
       els.panelHistory.classList.toggle("active", activeTab === "history");
       if (activeTab === "history") loadHistory();

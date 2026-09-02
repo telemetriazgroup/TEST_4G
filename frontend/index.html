@@ -25,8 +25,14 @@
   </header>
 
   <nav class="tabs" role="tablist">
-    <button type="button" class="tab active" data-tab="serial" role="tab">Serial en vivo</button>
-    <button type="button" class="tab" data-tab="history" role="tab">Histórico</button>
+    <button type="button" class="tab active" data-tab="serial" role="tab" aria-selected="true">
+      Serial en vivo
+      <small>últimas 100 · scroll interno</small>
+    </button>
+    <button type="button" class="tab" data-tab="history" role="tab" aria-selected="false">
+      Histórico por hora
+      <small>tramas acumuladas</small>
+    </button>
   </nav>
 
   <main class="layout">
@@ -64,7 +70,7 @@
       </div>
 
       <div id="serialTerm" class="term" aria-live="polite"></div>
-      <p id="emptySerial" class="empty show term-empty">Últimas 100 tramas. Para más detalle ve al Histórico.</p>
+      <p id="emptySerial" class="empty show term-empty">Últimas 100 tramas. Usa la pestaña «Histórico por hora» para ver más.</p>
 
       <form id="sendForm" class="send-bar">
         <select id="encoding" aria-label="Codificación">
