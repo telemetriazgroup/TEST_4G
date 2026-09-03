@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -76,6 +76,30 @@ class ConnectBody(BaseModel):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _history_query(
+    *,
+    session_id: str | None = None,
+    addr: str | None = None,
+    ip: str | None = None,
+    date: str | None = None,
+) -> dict[str, Any]:
+    q: dict[str, Any] = {}
+    if session_id:
+        q["session_id"] = session_id
+    elif addr:
+        q["addr"] = addr
+    elif ip:
+        q["ip"] = ip
+    if date:
+        try:
+            start = datetime.fromisoformat(f"{date}T00:00:00+00:00")
+        except ValueError as e:
+            raise HTTPException(400, "date debe ser YYYY-MM-DD") from e
+        end = start + timedelta(days=1)
+        q["ts"] = {"$gte": start.isoformat(), "$lt": end.isoformat()}
+    return q
 
 
 def _jsonable(doc: dict[str, Any]) -> dict[str, Any]:
@@ -427,27 +451,67 @@ async def get_messages(
     return {"messages": rows, "count": len(rows)}
 
 
+@app.get("/api/history/days")
+async def get_history_days(
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    limit: int = 365,
+):
+    """Lista días con tramas guardadas (más recientes primero)."""
+    q = _history_query(session_id=session_id, addr=addr, ip=ip)
+    limit = max(1, min(limit, 1000))
+    pipeline: list[dict[str, Any]] = [
+        {"$match": q},
+        {
+            "$project": {
+                "date": {"$substr": ["$ts", 0, 10]},
+                "direction": 1,
+            }
+        },
+        {
+            "$group": {
+                "_id": "$date",
+                "count": {"$sum": 1},
+                "rx": {"$sum": {"$cond": [{"$eq": ["$direction", "rx"]}, 1, 0]}},
+                "tx": {"$sum": {"$cond": [{"$eq": ["$direction", "tx"]}, 1, 0]}},
+            }
+        },
+        {"$sort": {"_id": -1}},
+        {"$limit": limit},
+    ]
+    rows = await db.messages.aggregate(pipeline).to_list(limit)
+    days = [
+        {"date": r["_id"], "count": r["count"], "rx": r["rx"], "tx": r["tx"]}
+        for r in rows
+        if r.get("_id")
+    ]
+    return {"days": days, "count": len(days)}
+
+
 @app.get("/api/history")
 async def get_history(
     addr: str | None = None,
     ip: str | None = None,
     session_id: str | None = None,
+    date: str | None = None,
     limit: int = 500,
     skip: int = 0,
 ):
-    q: dict[str, Any] = {}
-    if session_id:
-        q["session_id"] = session_id
-    elif addr:
-        q["addr"] = addr
-    elif ip:
-        q["ip"] = ip
-    limit = max(1, min(limit, 2000))
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
+    max_limit = 10000 if date else 2000
+    limit = max(1, min(limit, max_limit))
     skip = max(0, skip)
     total = await db.messages.count_documents(q)
     cursor = db.messages.find(q, {"_id": 0}).sort("ts", -1).skip(skip).limit(limit)
     rows = await cursor.to_list(limit)
-    return {"messages": rows, "total": total, "skip": skip, "limit": limit}
+    return {
+        "messages": rows,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "date": date,
+    }
 
 
 @app.post("/api/send")

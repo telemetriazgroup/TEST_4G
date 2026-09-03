@@ -31,7 +31,11 @@
     </button>
     <button type="button" class="tab" data-tab="history" role="tab" aria-selected="false">
       Histórico por hora
-      <small>tramas acumuladas</small>
+      <small>tramas recientes</small>
+    </button>
+    <button type="button" class="tab" data-tab="archive" role="tab" aria-selected="false">
+      Archivo por día
+      <small>buscar días anteriores</small>
     </button>
   </nav>
 
@@ -70,7 +74,7 @@
       </div>
 
       <div id="serialTerm" class="term" aria-live="polite"></div>
-      <p id="emptySerial" class="empty show term-empty">Últimas 100 tramas. Usa la pestaña «Histórico por hora» para ver más.</p>
+      <p id="emptySerial" class="empty show term-empty">Últimas 100 tramas en vivo. Todo se guarda en «Archivo por día».</p>
 
       <form id="sendForm" class="send-bar">
         <select id="encoding" aria-label="Codificación">
@@ -117,6 +121,51 @@
       <div id="historyHours" class="hours-wrap"></div>
       <p id="emptyHistory" class="empty show">Sin histórico. Las tramas se agrupan por hora (YYYY-MM-DD HH:00).</p>
       <p id="historyMeta" class="hint">—</p>
+    </section>
+
+    <!-- ARCHIVO POR DÍA -->
+    <section class="panel monitor tab-panel" id="panelArchive">
+      <div class="panel-head">
+        <h2 id="archiveTitle">Archivo por día</h2>
+        <div class="day-nav">
+          <button type="button" id="btnArchivePrev" class="btn ghost" title="Día anterior">◀</button>
+          <input type="date" id="archiveDate" aria-label="Fecha" />
+          <button type="button" id="btnArchiveNext" class="btn ghost" title="Día siguiente">▶</button>
+        </div>
+        <div class="filters">
+          <select id="archiveDir" aria-label="Dirección">
+            <option value="all">RX + TX</option>
+            <option value="rx">Solo RX</option>
+            <option value="tx">Solo TX</option>
+          </select>
+          <select id="archiveType" aria-label="Tipo">
+            <option value="all">Todos</option>
+            <option value="hex">HEX</option>
+            <option value="tcp_header">Cabecera TCP</option>
+            <option value="string">String</option>
+            <option value="int">Int</option>
+          </select>
+          <select id="archiveView" aria-label="Vista de datos">
+            <option value="hex">Columna HEX</option>
+            <option value="ascii">Columna ASCII</option>
+            <option value="both" selected>HEX + ASCII</option>
+          </select>
+        </div>
+        <button type="button" id="btnRefreshArchive" class="btn primary">Cargar día</button>
+      </div>
+
+      <div class="archive-layout">
+        <aside class="day-list-wrap">
+          <div class="day-list-head">Días con datos</div>
+          <ul id="archiveDayList" class="day-list"></ul>
+          <p id="emptyArchiveDays" class="empty show">Sin días guardados aún.</p>
+        </aside>
+        <div class="archive-content">
+          <div id="archiveHours" class="hours-wrap"></div>
+          <p id="emptyArchive" class="empty show">Elige un día para ver todas las tramas guardadas.</p>
+          <p id="archiveMeta" class="hint">Los datos no se borran — quedan en MongoDB.</p>
+        </div>
+      </div>
     </section>
   </main>
 

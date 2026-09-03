@@ -34,6 +34,20 @@
     exportFormat: document.getElementById("exportFormat"),
     panelSerial: document.getElementById("panelSerial"),
     panelHistory: document.getElementById("panelHistory"),
+    panelArchive: document.getElementById("panelArchive"),
+    archiveTitle: document.getElementById("archiveTitle"),
+    archiveDate: document.getElementById("archiveDate"),
+    archiveDayList: document.getElementById("archiveDayList"),
+    archiveHours: document.getElementById("archiveHours"),
+    archiveMeta: document.getElementById("archiveMeta"),
+    emptyArchive: document.getElementById("emptyArchive"),
+    emptyArchiveDays: document.getElementById("emptyArchiveDays"),
+    btnArchivePrev: document.getElementById("btnArchivePrev"),
+    btnArchiveNext: document.getElementById("btnArchiveNext"),
+    btnRefreshArchive: document.getElementById("btnRefreshArchive"),
+    archiveDir: document.getElementById("archiveDir"),
+    archiveType: document.getElementById("archiveType"),
+    archiveView: document.getElementById("archiveView"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -41,10 +55,17 @@
   let live = [];
   /** @type {Array<object>} */
   let history = [];
+  /** @type {Array<object>} */
+  let archive = [];
+  /** @type {Array<{date:string,count:number,rx:number,tx:number}>} */
+  let archiveDays = [];
+  let archiveSelectedDate = "";
   let activeTab = "serial";
   let ws;
   /** horas expandidas en histórico */
   const openHours = new Set();
+  /** horas expandidas en archivo */
+  const openArchiveHours = new Set();
 
   function setWsState(ok) {
     els.wsDot.classList.toggle("on", ok);
@@ -136,6 +157,43 @@
     return (els.historyView && els.historyView.value) || "both";
   }
 
+  function archiveViewMode() {
+    return (els.archiveView && els.archiveView.value) || "both";
+  }
+
+  function todayDateKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function formatDayLabel(dateKey) {
+    try {
+      const [y, m, d] = dateKey.split("-").map(Number);
+      const dt = new Date(y, m - 1, d);
+      return dt.toLocaleDateString("es-PE", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+    } catch {
+      return dateKey;
+    }
+  }
+
+  function shiftDateKey(dateKey, deltaDays) {
+    const [y, m, d] = dateKey.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    dt.setDate(dt.getDate() + deltaDays);
+    const yy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  }
+
   /** Clave de hora local: YYYY-MM-DD HH:00 */
   function hourKey(ts) {
     try {
@@ -180,7 +238,9 @@
       });
       els.panelSerial.classList.toggle("active", activeTab === "serial");
       els.panelHistory.classList.toggle("active", activeTab === "history");
+      els.panelArchive.classList.toggle("active", activeTab === "archive");
       if (activeTab === "history") loadHistory();
+      if (activeTab === "archive") loadArchiveTab();
     });
   });
 
@@ -352,11 +412,19 @@
 
   // ---- Histórico agrupado por hora ----
   function passesHistoryFilters(msg) {
+    return passesMessageFilters(msg, els.filterDir, els.filterType);
+  }
+
+  function passesArchiveFilters(msg) {
+    return passesMessageFilters(msg, els.archiveDir, els.archiveType);
+  }
+
+  function passesMessageFilters(msg, dirEl, typeEl) {
     const dir = (msg.direction || "rx").toLowerCase();
     const type = normalizeType(msg);
     if (selected && msg.addr && msg.addr !== selected.addr) return false;
-    if (els.filterDir.value !== "all" && dir !== els.filterDir.value) return false;
-    if (els.filterType.value !== "all" && type !== els.filterType.value) return false;
+    if (dirEl && dirEl.value !== "all" && dir !== dirEl.value) return false;
+    if (typeEl && typeEl.value !== "all" && type !== typeEl.value) return false;
     return true;
   }
 
@@ -367,35 +435,31 @@
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(msg);
     }
-    // horas más recientes primero
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }
 
-  function renderHistory() {
-    const rows = history.filter(passesHistoryFilters);
-    els.historyHours.innerHTML = "";
-    els.emptyHistory.classList.toggle("show", rows.length === 0);
-
+  function renderHourGroups(container, rows, viewMode, openSet, metaEl, titlePrefix) {
+    container.innerHTML = "";
     const groups = groupByHour(rows);
-    const view = historyViewMode();
-    const showHex = view === "hex" || view === "both";
-    const showAscii = view === "ascii" || view === "both";
+    const showHex = viewMode === "hex" || viewMode === "both";
+    const showAscii = viewMode === "ascii" || viewMode === "both";
 
-    els.historyMeta.textContent =
-      `${groups.length} hora(s) · ${rows.length} trama(s)` +
-      (selected ? ` · ${selected.addr}` : "");
+    if (metaEl) {
+      metaEl.textContent =
+        `${titlePrefix}${groups.length} hora(s) · ${rows.length} trama(s)` +
+        (selected ? ` · ${selected.addr}` : "");
+    }
 
     for (const [hour, msgs] of groups) {
       const rx = msgs.filter((m) => (m.direction || "rx") === "rx").length;
       const tx = msgs.filter((m) => m.direction === "tx").length;
-      const open = openHours.has(hour);
 
       const section = document.createElement("details");
       section.className = "hour-block";
-      section.open = open;
+      section.open = openSet.has(hour);
       section.addEventListener("toggle", () => {
-        if (section.open) openHours.add(hour);
-        else openHours.delete(hour);
+        if (section.open) openSet.add(hour);
+        else openSet.delete(hour);
       });
 
       const summary = document.createElement("summary");
@@ -415,7 +479,6 @@
         `</tr></thead>`;
       const tbody = document.createElement("tbody");
 
-      // Orden cronológico dentro de la hora
       const ordered = [...msgs].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
       for (const msg of ordered) {
         const dir = (msg.direction || "rx").toLowerCase();
@@ -439,8 +502,21 @@
       }
       table.appendChild(tbody);
       section.appendChild(table);
-      els.historyHours.appendChild(section);
+      container.appendChild(section);
     }
+  }
+
+  function renderHistory() {
+    const rows = history.filter(passesHistoryFilters);
+    els.emptyHistory.classList.toggle("show", rows.length === 0);
+    renderHourGroups(
+      els.historyHours,
+      rows,
+      historyViewMode(),
+      openHours,
+      els.historyMeta,
+      ""
+    );
   }
 
   async function loadHistory() {
@@ -451,12 +527,123 @@
         : "limit=2000";
       const r = await fetch(`${API}/api/history?${q}`);
       const data = await r.json();
-      // API history viene más reciente primero; mantener así
       history = data.messages || [];
       renderHistory();
     } catch (e) {
       els.historyMeta.textContent = String(e);
     }
+  }
+
+  function historyQueryBase() {
+    return selected ? `addr=${encodeURIComponent(selected.addr)}` : "";
+  }
+
+  function renderArchiveDayList() {
+    els.archiveDayList.innerHTML = "";
+    els.emptyArchiveDays.classList.toggle("show", archiveDays.length === 0);
+    for (const day of archiveDays) {
+      const li = document.createElement("li");
+      li.dataset.date = day.date;
+      if (day.date === archiveSelectedDate) li.classList.add("active");
+      li.innerHTML =
+        `<span class="date">${esc(formatDayLabel(day.date))}</span>` +
+        `<span class="meta">${day.count} tramas · RX ${day.rx} · TX ${day.tx}</span>`;
+      li.addEventListener("click", () => selectArchiveDay(day.date));
+      els.archiveDayList.appendChild(li);
+    }
+  }
+
+  function setArchiveDateInput(dateKey) {
+    archiveSelectedDate = dateKey || "";
+    if (els.archiveDate) els.archiveDate.value = dateKey || "";
+    [...els.archiveDayList.children].forEach((li) => {
+      li.classList.toggle("active", li.dataset.date === archiveSelectedDate);
+    });
+  }
+
+  function renderArchive() {
+    const rows = archive.filter(passesArchiveFilters);
+    els.emptyArchive.classList.toggle("show", !archiveSelectedDate || rows.length === 0);
+    const dayLabel = archiveSelectedDate ? formatDayLabel(archiveSelectedDate) : "";
+    renderHourGroups(
+      els.archiveHours,
+      rows,
+      archiveViewMode(),
+      openArchiveHours,
+      els.archiveMeta,
+      archiveSelectedDate ? `${dayLabel} · ` : ""
+    );
+    if (archiveSelectedDate && rows.length === 0) {
+      els.archiveMeta.textContent = `${dayLabel} · sin tramas para los filtros actuales`;
+    }
+  }
+
+  async function loadArchiveDays() {
+    try {
+      const base = historyQueryBase();
+      const url = base ? `${API}/api/history/days?${base}` : `${API}/api/history/days`;
+      const r = await fetch(url);
+      const data = await r.json();
+      archiveDays = data.days || [];
+      renderArchiveDayList();
+      if (!archiveSelectedDate && archiveDays.length > 0) {
+        setArchiveDateInput(archiveDays[0].date);
+      }
+    } catch (e) {
+      els.archiveMeta.textContent = String(e);
+    }
+  }
+
+  async function loadArchiveDay(dateKey) {
+    if (!dateKey) return;
+    setArchiveDateInput(dateKey);
+    openArchiveHours.clear();
+    els.archiveMeta.textContent = `Cargando ${formatDayLabel(dateKey)}…`;
+    try {
+      const parts = [`date=${encodeURIComponent(dateKey)}`, "limit=10000"];
+      const base = historyQueryBase();
+      if (base) parts.unshift(base);
+      const r = await fetch(`${API}/api/history?${parts.join("&")}`);
+      const data = await r.json();
+      archive = data.messages || [];
+      const total = data.total ?? archive.length;
+      renderArchive();
+      if (total > archive.length) {
+        els.archiveMeta.textContent +=
+          ` · mostrando ${archive.length} de ${total} (usa filtros para acotar)`;
+      }
+    } catch (e) {
+      els.archiveMeta.textContent = String(e);
+    }
+  }
+
+  async function selectArchiveDay(dateKey) {
+    await loadArchiveDay(dateKey);
+  }
+
+  async function loadArchiveTab() {
+    await loadArchiveDays();
+    if (archiveSelectedDate) {
+      await loadArchiveDay(archiveSelectedDate);
+    } else {
+      renderArchive();
+    }
+  }
+
+  function navigateArchiveDay(delta) {
+    if (!archiveSelectedDate) {
+      if (archiveDays.length > 0) selectArchiveDay(archiveDays[0].date);
+      return;
+    }
+    const idx = archiveDays.findIndex((d) => d.date === archiveSelectedDate);
+    if (idx >= 0) {
+      const nextIdx = idx - delta;
+      if (nextIdx >= 0 && nextIdx < archiveDays.length) {
+        selectArchiveDay(archiveDays[nextIdx].date);
+        return;
+      }
+    }
+    selectArchiveDay(shiftDateKey(archiveSelectedDate, delta));
   }
 
   // ---- Devices ----
@@ -518,6 +705,9 @@
     els.historyTitle.textContent = selected
       ? `Histórico · ${selected.ip}:${selected.port}`
       : "Histórico por hora";
+    els.archiveTitle.textContent = selected
+      ? `Archivo · ${selected.ip}:${selected.port}`
+      : "Archivo por día";
     els.sendHint.textContent = selected
       ? `Sesión ${selected.addr} — envío / export JSON`
       : "Selecciona un dispositivo (IP:puerto) para enviar o exportar.";
@@ -529,6 +719,7 @@
 
     await refreshSerial();
     if (activeTab === "history") await loadHistory();
+    if (activeTab === "archive") await loadArchiveTab();
   }
 
   // ---- WS ----
@@ -600,6 +791,19 @@
   els.filterType.addEventListener("change", renderHistory);
   if (els.serialView) els.serialView.addEventListener("change", renderSerial);
   if (els.historyView) els.historyView.addEventListener("change", renderHistory);
+
+  els.btnRefreshArchive.addEventListener("click", () =>
+    loadArchiveDay(archiveSelectedDate || els.archiveDate.value)
+  );
+  els.btnArchivePrev.addEventListener("click", () => navigateArchiveDay(1));
+  els.btnArchiveNext.addEventListener("click", () => navigateArchiveDay(-1));
+  els.archiveDate.addEventListener("change", () => {
+    const v = els.archiveDate.value;
+    if (v) loadArchiveDay(v);
+  });
+  els.archiveDir.addEventListener("change", renderArchive);
+  els.archiveType.addEventListener("change", renderArchive);
+  if (els.archiveView) els.archiveView.addEventListener("change", renderArchive);
 
   els.btnSweep.addEventListener("click", async () => {
     try {
