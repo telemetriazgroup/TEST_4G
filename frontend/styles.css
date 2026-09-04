@@ -405,8 +405,17 @@ body {
 }
 .hour-block[open] > summary::before { content: "▾"; }
 
-.hour-label { font-weight: 600; color: var(--ink); }
+.hour-label { font-weight: 600; color: var(--ink); flex: 1; min-width: 9rem; }
 .hour-meta { color: var(--muted); font-size: 0.75rem; }
+.hour-export {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+.hour-export .btn {
+  font-size: 0.68rem;
+  padding: 0.18rem 0.4rem;
+}
 
 .hour-block .capture-table {
   border-top: 1px solid var(--line);

@@ -114,8 +114,13 @@
             <option value="ascii">Columna ASCII</option>
             <option value="both" selected>HEX + ASCII</option>
           </select>
+          <select id="historyExportKind" aria-label="Formato de descarga">
+            <option value="json" selected>JSON</option>
+            <option value="csv">CSV</option>
+          </select>
         </div>
-        <button type="button" id="btnRefreshHistory" class="btn primary">Actualizar histórico</button>
+        <button type="button" id="btnExportHistory" class="btn primary">Descargar</button>
+        <button type="button" id="btnRefreshHistory" class="btn ghost">Actualizar</button>
       </div>
 
       <div id="historyHours" class="hours-wrap"></div>
@@ -150,8 +155,13 @@
             <option value="ascii">Columna ASCII</option>
             <option value="both" selected>HEX + ASCII</option>
           </select>
+          <select id="archiveExportKind" aria-label="Formato de descarga">
+            <option value="json" selected>JSON</option>
+            <option value="csv">CSV</option>
+          </select>
         </div>
-        <button type="button" id="btnRefreshArchive" class="btn primary">Cargar día</button>
+        <button type="button" id="btnExportArchive" class="btn primary">Descargar día</button>
+        <button type="button" id="btnRefreshArchive" class="btn ghost">Cargar día</button>
       </div>
 
       <div class="archive-layout">

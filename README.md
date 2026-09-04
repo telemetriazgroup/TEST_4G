@@ -86,3 +86,5 @@ Para reenviar JSON a TermoKing/Datos como el script original:
 FORWARD_LEGACY=1 docker compose up -d tcp_bridge
 ```
 # TEST_4G
+
+

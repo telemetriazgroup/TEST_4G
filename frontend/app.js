@@ -27,6 +27,8 @@
     btnClearSerial: document.getElementById("btnClearSerial"),
     btnExportSerial: document.getElementById("btnExportSerial"),
     btnRefreshHistory: document.getElementById("btnRefreshHistory"),
+    btnExportHistory: document.getElementById("btnExportHistory"),
+    historyExportKind: document.getElementById("historyExportKind"),
     filterDir: document.getElementById("filterDir"),
     filterType: document.getElementById("filterType"),
     serialView: document.getElementById("serialView"),
@@ -45,6 +47,8 @@
     btnArchivePrev: document.getElementById("btnArchivePrev"),
     btnArchiveNext: document.getElementById("btnArchiveNext"),
     btnRefreshArchive: document.getElementById("btnRefreshArchive"),
+    btnExportArchive: document.getElementById("btnExportArchive"),
+    archiveExportKind: document.getElementById("archiveExportKind"),
     archiveDir: document.getElementById("archiveDir"),
     archiveType: document.getElementById("archiveType"),
     archiveView: document.getElementById("archiveView"),
@@ -410,6 +414,143 @@
     els.sendHint.textContent = `Exportado ${frames.length} trama(s) · ${format} · ${selected.addr}`;
   }
 
+  const ANALYSIS_COLS = [
+    "ts",
+    "date",
+    "hour",
+    "direction",
+    "value_type",
+    "hex",
+    "ascii",
+    "decimal",
+    "text",
+    "frame_len",
+    "addr",
+    "ip",
+    "session_id",
+  ];
+
+  function analysisRow(msg) {
+    const parsed = parseAddr(msg.addr);
+    return {
+      ts: msg.ts || "",
+      date: hourKey(msg.ts).slice(0, 10),
+      hour: hourKey(msg.ts),
+      direction: (msg.direction || "rx").toLowerCase(),
+      value_type: normalizeType(msg),
+      hex: msg.hex || "",
+      ascii: asciiOf(msg) === "—" ? "" : asciiOf(msg),
+      decimal: decimalOf(msg) === "—" ? "" : decimalOf(msg),
+      text: msg.text || "",
+      frame_len: msg.frame_len ?? "",
+      addr: msg.addr || "",
+      ip: msg.ip || parsed.ip || "",
+      session_id: msg.session_id || "",
+    };
+  }
+
+  function csvEscape(value) {
+    const s = value == null ? "" : String(value);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function toCsv(rows) {
+    const lines = [ANALYSIS_COLS.join(",")];
+    for (const row of rows) {
+      lines.push(ANALYSIS_COLS.map((col) => csvEscape(row[col])).join(","));
+    }
+    return `\uFEFF${lines.join("\r\n")}`;
+  }
+
+  function downloadText(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function safeFilePart(value, fallback) {
+    const s = String(value || fallback || "x").replace(/[^\w.-]+/g, "_");
+    return s.slice(0, 48) || fallback || "x";
+  }
+
+  function exportAnalysis(rows, source, kind, extra = {}) {
+    const statusEl = extra.statusEl || els.historyMeta;
+    if (!rows.length) {
+      if (statusEl) statusEl.textContent = "No hay tramas para descargar con los filtros actuales.";
+      return;
+    }
+    const frames = [...rows]
+      .sort((a, b) => String(a.ts).localeCompare(String(b.ts)))
+      .map(analysisRow);
+    const payload = {
+      exported_at: new Date().toISOString(),
+      source,
+      device: selected ? selected.addr : "todos",
+      date: extra.date || null,
+      hour: extra.hour || null,
+      filters: extra.filters || {},
+      count: frames.length,
+      frames,
+    };
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const scope = selected ? safeFilePart(selected.addr, "ip") : "todos";
+    const range = extra.hour
+      ? safeFilePart(extra.hour.replace(" ", "_"), "hora")
+      : extra.date
+        ? safeFilePart(extra.date, "dia")
+        : "reciente";
+    const base = `${source}_${scope}_${range}_${stamp}`;
+    if (kind === "csv") {
+      downloadText(toCsv(frames), `${base}.csv`, "text/csv;charset=utf-8");
+    } else {
+      downloadText(JSON.stringify(payload, null, 2), `${base}.json`, "application/json");
+    }
+    if (statusEl) {
+      statusEl.textContent = `Descargado ${frames.length} trama(s) · ${kind.toUpperCase()} · ${range}`;
+    }
+  }
+
+  function currentHistoryFilters() {
+    return {
+      direction: els.filterDir.value,
+      type: els.filterType.value,
+    };
+  }
+
+  function currentArchiveFilters() {
+    return {
+      direction: els.archiveDir.value,
+      type: els.archiveType.value,
+    };
+  }
+
+  function exportHistory(kind, hourRows, hourKeyValue) {
+    const rows = hourRows || history.filter(passesHistoryFilters);
+    exportAnalysis(rows, hourKeyValue ? "historico_hora" : "historico", kind, {
+      statusEl: els.historyMeta,
+      hour: hourKeyValue || null,
+      filters: currentHistoryFilters(),
+    });
+  }
+
+  function exportArchive(kind, hourRows, hourKeyValue) {
+    if (!archiveSelectedDate && !hourRows) {
+      els.archiveMeta.textContent = "Elige un día para descargar el archivo.";
+      return;
+    }
+    const rows = hourRows || archive.filter(passesArchiveFilters);
+    exportAnalysis(rows, hourKeyValue ? "archivo_hora" : "archivo_dia", kind, {
+      statusEl: els.archiveMeta,
+      date: archiveSelectedDate || null,
+      hour: hourKeyValue || null,
+      filters: currentArchiveFilters(),
+    });
+  }
+
   // ---- Histórico agrupado por hora ----
   function passesHistoryFilters(msg) {
     return passesMessageFilters(msg, els.filterDir, els.filterType);
@@ -438,7 +579,7 @@
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }
 
-  function renderHourGroups(container, rows, viewMode, openSet, metaEl, titlePrefix) {
+  function renderHourGroups(container, rows, viewMode, openSet, metaEl, titlePrefix, exportFn) {
     container.innerHTML = "";
     const groups = groupByHour(rows);
     const showHex = viewMode === "hex" || viewMode === "both";
@@ -463,9 +604,32 @@
       });
 
       const summary = document.createElement("summary");
-      summary.innerHTML =
-        `<span class="hour-label">${esc(hour)}</span>` +
-        `<span class="hour-meta">${msgs.length} tramas · RX ${rx} · TX ${tx}</span>`;
+      const label = document.createElement("span");
+      label.className = "hour-label";
+      label.textContent = hour;
+      const meta = document.createElement("span");
+      meta.className = "hour-meta";
+      meta.textContent = `${msgs.length} tramas · RX ${rx} · TX ${tx}`;
+      summary.appendChild(label);
+      summary.appendChild(meta);
+      if (exportFn) {
+        const actions = document.createElement("span");
+        actions.className = "hour-export";
+        for (const kind of ["json", "csv"]) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn ghost";
+          btn.textContent = kind.toUpperCase();
+          btn.title = `Descargar esta hora en ${kind.toUpperCase()}`;
+          btn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            exportFn(kind, msgs, hour);
+          });
+          actions.appendChild(btn);
+        }
+        summary.appendChild(actions);
+      }
       section.appendChild(summary);
 
       const table = document.createElement("table");
@@ -515,7 +679,8 @@
       historyViewMode(),
       openHours,
       els.historyMeta,
-      ""
+      "",
+      exportHistory
     );
   }
 
@@ -571,7 +736,8 @@
       archiveViewMode(),
       openArchiveHours,
       els.archiveMeta,
-      archiveSelectedDate ? `${dayLabel} · ` : ""
+      archiveSelectedDate ? `${dayLabel} · ` : "",
+      exportArchive
     );
     if (archiveSelectedDate && rows.length === 0) {
       els.archiveMeta.textContent = `${dayLabel} · sin tramas para los filtros actuales`;
@@ -787,6 +953,9 @@
   els.btnRefreshSerial.addEventListener("click", refreshSerial);
   els.btnExportSerial.addEventListener("click", exportSerialJson);
   els.btnRefreshHistory.addEventListener("click", loadHistory);
+  els.btnExportHistory.addEventListener("click", () =>
+    exportHistory((els.historyExportKind && els.historyExportKind.value) || "json")
+  );
   els.filterDir.addEventListener("change", renderHistory);
   els.filterType.addEventListener("change", renderHistory);
   if (els.serialView) els.serialView.addEventListener("change", renderSerial);
@@ -804,6 +973,9 @@
   els.archiveDir.addEventListener("change", renderArchive);
   els.archiveType.addEventListener("change", renderArchive);
   if (els.archiveView) els.archiveView.addEventListener("change", renderArchive);
+  els.btnExportArchive.addEventListener("click", () =>
+    exportArchive((els.archiveExportKind && els.archiveExportKind.value) || "json")
+  );
 
   els.btnSweep.addEventListener("click", async () => {
     try {
