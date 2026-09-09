@@ -52,6 +52,10 @@
     archiveDir: document.getElementById("archiveDir"),
     archiveType: document.getElementById("archiveType"),
     archiveView: document.getElementById("archiveView"),
+    homoQueueText: document.getElementById("homoQueueText"),
+    btnHomoScan: document.getElementById("btnHomoScan"),
+    btnHomoEnqueueAll: document.getElementById("btnHomoEnqueueAll"),
+    btnHomoClear: document.getElementById("btnHomoClear"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -70,6 +74,10 @@
   const openHours = new Set();
   /** horas expandidas en archivo */
   const openArchiveHours = new Set();
+  /** @type {Map<string, {count:number, ids:string[]}>} */
+  const homoByHour = new Map();
+  let homoConfigured = false;
+  let homoScanCount = 0;
 
   function setWsState(ok) {
     els.wsDot.classList.toggle("on", ok);
@@ -612,9 +620,9 @@
       meta.textContent = `${msgs.length} tramas · RX ${rx} · TX ${tx}`;
       summary.appendChild(label);
       summary.appendChild(meta);
+      const actions = document.createElement("span");
+      actions.className = "hour-export";
       if (exportFn) {
-        const actions = document.createElement("span");
-        actions.className = "hour-export";
         for (const kind of ["json", "csv"]) {
           const btn = document.createElement("button");
           btn.type = "button";
@@ -628,8 +636,25 @@
           });
           actions.appendChild(btn);
         }
-        summary.appendChild(actions);
       }
+      const homoInfo = homoByHour.get(hour);
+      if (homoInfo && homoInfo.count > 0) {
+        const homoBtn = document.createElement("button");
+        homoBtn.type = "button";
+        homoBtn.className = "btn ghost homo";
+        homoBtn.textContent = `Enviar ${homoInfo.count}`;
+        homoBtn.title = homoConfigured
+          ? `Encolar ${homoInfo.count} trama(s) homologable(s) de esta hora (5 s entre POST)`
+          : "Configura HOMOLOGATE_URL para enviar";
+        homoBtn.disabled = !homoConfigured;
+        homoBtn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          enqueueHomologate({ hour });
+        });
+        actions.appendChild(homoBtn);
+      }
+      if (actions.childNodes.length) summary.appendChild(actions);
       section.appendChild(summary);
 
       const table = document.createElement("table");
@@ -670,6 +695,122 @@
     }
   }
 
+  function historyQueryParams() {
+    const p = new URLSearchParams();
+    if (selected && selected.addr) p.set("addr", selected.addr);
+    return p;
+  }
+
+  function renderHomoQueue(q) {
+    if (!els.homoQueueText) return;
+    if (!q) {
+      els.homoQueueText.textContent = "Cola homologación: —";
+      return;
+    }
+    const parts = [];
+    if (!q.configured) parts.push("sin URL de destino");
+    else parts.push(q.host || "destino ok");
+    if (q.sending) parts.push(`enviando ${q.sending.i || ""} ${q.sending.hour || ""}`.trim());
+    parts.push(`${q.pending || 0} en cola`);
+    parts.push(`${q.sent || 0} enviadas`);
+    if (q.errors) parts.push(`${q.errors} error(es)`);
+    parts.push(`${q.interval_s || 5}s entre POST`);
+    els.homoQueueText.textContent = `Cola: ${parts.join(" · ")}`;
+    if (els.btnHomoEnqueueAll) {
+      els.btnHomoEnqueueAll.disabled = !homoConfigured || homoScanCount <= 0;
+      els.btnHomoEnqueueAll.textContent =
+        homoScanCount > 0 ? `Encolar ${homoScanCount} visibles` : "Encolar visibles";
+    }
+  }
+
+  async function refreshHomoQueue() {
+    try {
+      const r = await fetch(`${API}/api/homologate/queue`);
+      const data = await r.json();
+      homoConfigured = !!(data.configured && data.enabled);
+      renderHomoQueue(data);
+    } catch (_) {}
+  }
+
+  async function scanHomologate(opts) {
+    const p = historyQueryParams();
+    if (opts && opts.date) p.set("date", opts.date);
+    if (opts && opts.hour) p.set("hour", opts.hour);
+    if (els.homoQueueText) els.homoQueueText.textContent = "Explorando histórico…";
+    try {
+      const r = await fetch(`${API}/api/homologate/candidates?${p.toString()}`);
+      const data = await r.json();
+      homoConfigured = !!(data.configured && data.enabled);
+      homoByHour.clear();
+      for (const h of data.hours || []) {
+        const ids = (data.items || [])
+          .filter((it) => it.hour === h.hour)
+          .map((it) => it.message_id)
+          .filter(Boolean);
+        homoByHour.set(h.hour, { count: h.count, ids });
+      }
+      homoScanCount = data.count || 0;
+      renderHomoQueue(data.queue);
+      if (activeTab === "history") renderHistory();
+      if (activeTab === "archive") renderArchive();
+      const dest = data.configured ? data.host : "sin URL";
+      const msg = `${homoScanCount} trama(s) homologable(s) · ${ (data.hours || []).length } hora(s) · ${dest}`;
+      if (els.historyMeta && activeTab === "history") els.historyMeta.textContent = msg;
+      if (els.archiveMeta && activeTab === "archive") els.archiveMeta.textContent = msg;
+    } catch (e) {
+      if (els.homoQueueText) els.homoQueueText.textContent = String(e);
+    }
+  }
+
+  async function enqueueHomologate(opts) {
+    if (!homoConfigured) {
+      alert("Configura HOMOLOGATE_URL en el backend para enviar.");
+      return;
+    }
+    const hour = opts && opts.hour;
+    const date = opts && opts.date;
+    const n = hour
+      ? (homoByHour.get(hour) || {}).count || 0
+      : homoScanCount;
+    const label = hour ? `la hora ${hour}` : date ? `el día ${date}` : "las horas visibles";
+    if (!n) {
+      alert("No hay tramas homologables para encolar. Pulsa «Explorar homologables».");
+      return;
+    }
+    if (!confirm(`¿Encolar ${n} trama(s) de ${label}?\nSe envían por POST con 5 s entre cada una.\nSi ya hay un envío, se agregan al final de la cola.`)) {
+      return;
+    }
+    const body = {};
+    if (hour) body.hour = hour;
+    else if (date) body.date = date;
+    else {
+      const ids = [];
+      homoByHour.forEach((info) => {
+        for (const id of info.ids || []) ids.push(id);
+      });
+      if (ids.length) body.ids = ids;
+    }
+    if (selected && selected.addr) body.addr = selected.addr;
+    try {
+      const r = await fetch(`${API}/api/homologate/enqueue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.detail || "No se pudo encolar");
+        return;
+      }
+      renderHomoQueue(data.queue);
+      const hint = `Encoladas ${data.added || 0} (omitidas ${data.skipped || 0}) · pendientes ${data.queue && data.queue.pending}`;
+      if (els.historyMeta) els.historyMeta.textContent = hint;
+      if (els.archiveMeta && activeTab === "archive") els.archiveMeta.textContent = hint;
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
   function renderHistory() {
     const rows = history.filter(passesHistoryFilters);
     els.emptyHistory.classList.toggle("show", rows.length === 0);
@@ -694,6 +835,7 @@
       const data = await r.json();
       history = data.messages || [];
       renderHistory();
+      scanHomologate();
     } catch (e) {
       els.historyMeta.textContent = String(e);
     }
@@ -774,6 +916,7 @@
       archive = data.messages || [];
       const total = data.total ?? archive.length;
       renderArchive();
+      if (dateKey) scanHomologate({ date: dateKey });
       if (total > archive.length) {
         els.archiveMeta.textContent +=
           ` · mostrando ${archive.length} de ${total} (usa filtros para acotar)`;
@@ -977,6 +1120,25 @@
     exportArchive((els.archiveExportKind && els.archiveExportKind.value) || "json")
   );
 
+  els.btnHomoScan.addEventListener("click", () => {
+    if (activeTab === "archive" && archiveSelectedDate) scanHomologate({ date: archiveSelectedDate });
+    else scanHomologate();
+  });
+  els.btnHomoEnqueueAll.addEventListener("click", () => {
+    if (activeTab === "archive" && archiveSelectedDate) enqueueHomologate({ date: archiveSelectedDate });
+    else enqueueHomologate({});
+  });
+  els.btnHomoClear.addEventListener("click", async () => {
+    try {
+      const r = await fetch(`${API}/api/homologate/queue/clear`, { method: "POST" });
+      const data = await r.json();
+      renderHomoQueue(data.queue);
+    } catch (e) {
+      if (els.homoQueueText) els.homoQueueText.textContent = String(e);
+    }
+  });
+  setInterval(refreshHomoQueue, 2000);
+
   els.btnSweep.addEventListener("click", async () => {
     try {
       const r = await fetch(`${API}/api/sweep`, { method: "POST" });
@@ -1002,5 +1164,6 @@
   connectWs();
   loadDevices();
   refreshSerial();
+  refreshHomoQueue();
   setInterval(loadDevices, 10000);
 })();

@@ -1,6 +1,6 @@
 """Criterios de aceptación de datos_homologar.md (sin Mongo / HTTP)."""
 
-from homologate import build_standard, classify_frame, split_json_objects
+from homologate import build_standard, classify_frame, hour_key, split_json_objects
 
 SAMPLE_CONCAT = (
     '{"i":"POLLO_BEBE","d01":"1B0204000082A700F600FE7FEB00FB00F200EA00FF7FEF00EF00F000F000F0004300'
@@ -75,9 +75,14 @@ def test_forma_b_does_not_map_alarm_to_d02():
     assert "82A700" not in classified["opcodes"]
 
 
+def test_hour_key_lima():
+    assert hour_key("2026-09-09T15:26:41.752381Z") == "2026-09-09 10:00"
+
+
 if __name__ == "__main__":
     test_split_concat_does_not_post_rs()
     test_forma_a_standard_payload()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
+    test_hour_key_lima()
     print("ok")

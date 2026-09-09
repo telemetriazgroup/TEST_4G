@@ -10,8 +10,10 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 OP_SENSOR = "82A700"
 OP_CONTROL = "82A701"
@@ -54,6 +56,36 @@ def env_dedup_s() -> int:
         return max(0, min(int(os.getenv("HOMOLOGATE_DEDUP_S", "30")), 600))
     except ValueError:
         return 30
+
+
+def env_queue_interval_s() -> float:
+    try:
+        return max(0.0, min(float(os.getenv("HOMOLOGATE_QUEUE_INTERVAL_S", "5")), 120))
+    except ValueError:
+        return 5.0
+
+
+def env_tz() -> ZoneInfo:
+    name = (os.getenv("HOMOLOGATE_TZ", "America/Lima") or "America/Lima").strip()
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return ZoneInfo("America/Lima")
+
+
+def hour_key(ts: str | None) -> str:
+    """Misma clave que el frontend: YYYY-MM-DD HH:00 en zona local (Lima)."""
+    if not ts:
+        return "desconocida"
+    raw = str(ts).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(env_tz())
+        return f"{local.year:04d}-{local.month:02d}-{local.day:02d} {local.hour:02d}:00"
+    except Exception:
+        return "desconocida"
 
 
 def destination_host(url: str | None = None) -> str | None:

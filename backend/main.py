@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -42,6 +44,18 @@ client: AsyncIOMotorClient | None = None
 db = None
 _ws_clients: set[WebSocket] = set()
 log = logging.getLogger("test_4g")
+_queue_lock = asyncio.Lock()
+_queue: deque[dict[str, Any]] = deque()
+_queue_wake = asyncio.Event()
+_queue_state: dict[str, Any] = {
+    "running": False,
+    "paused": False,
+    "sending": None,
+    "last_sent_at": None,
+    "sent": 0,
+    "errors": 0,
+    "enqueued": 0,
+}
 
 
 class SendBody(BaseModel):
@@ -73,6 +87,14 @@ class ConnectBody(BaseModel):
     imei: str | None = None
     tcp_header: dict[str, Any] | None = None
     session_id: str | None = None
+
+
+class HomologateEnqueueBody(BaseModel):
+    hour: str | None = None
+    date: str | None = None
+    addr: str | None = None
+    ip: str | None = None
+    ids: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +257,9 @@ async def startup() -> None:
     await db.homologate_log.create_index([("payload_hash", 1), ("ts", -1)])
     await db.homologate_log.create_index([("status", 1), ("ts", -1)])
     await db.messages.create_index([("homologate_status", 1), ("ts", -1)])
+    await db.homologate_queue.create_index([("status", 1), ("enqueued_at", 1)])
+    await _restore_homologate_queue()
+    asyncio.create_task(_homologate_queue_worker())
 
 
 @app.on_event("shutdown")
@@ -556,6 +581,233 @@ async def _homologate_after_persist(doc: dict[str, Any]) -> None:
         await _mark_message(doc, {"homologate_status": "error", "homologate_reason": "internal"})
 
 
+def _candidate_from_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
+    classified = homo.classify_frame(doc)
+    if classified["status"] != "ready" or not classified.get("payload"):
+        return None
+    return {
+        "message_id": str(doc.get("_id") or ""),
+        "ts": doc.get("ts"),
+        "hour": homo.hour_key(doc.get("ts")),
+        "addr": doc.get("addr"),
+        "ip": doc.get("ip"),
+        "session_id": doc.get("session_id"),
+        "i": classified["payload"].get("i"),
+        "opcodes": classified.get("opcodes") or [],
+        "payload": classified["payload"],
+        "payload_hash": classified.get("payload_hash"),
+        "homologate_status": doc.get("homologate_status"),
+    }
+
+
+async def _scan_candidates(
+    *,
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    date: str | None = None,
+    hour: str | None = None,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    scan_date = date
+    if hour and not scan_date and len(hour) >= 10:
+        scan_date = hour[:10]
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=scan_date)
+    q["direction"] = "rx"
+    q["value_type"] = {"$ne": "tcp_header"}
+    limit = max(1, min(limit, 10000))
+    cursor = db.messages.find(q).sort("ts", 1).limit(limit)
+    rows = await cursor.to_list(limit)
+    out: list[dict[str, Any]] = []
+    for doc in rows:
+        item = _candidate_from_doc(doc)
+        if not item:
+            continue
+        if hour and item["hour"] != hour:
+            continue
+        out.append(item)
+    return out
+
+
+def _queue_snapshot() -> dict[str, Any]:
+    pending = [x for x in _queue if x.get("status") == "queued"]
+    by_hour: dict[str, int] = {}
+    for item in pending:
+        hk = item.get("hour") or "?"
+        by_hour[hk] = by_hour.get(hk, 0) + 1
+    return {
+        "configured": bool(homo.env_url()),
+        "enabled": homo.env_enabled(),
+        "host": homo.destination_host(),
+        "interval_s": homo.env_queue_interval_s(),
+        "running": _queue_state["running"],
+        "paused": _queue_state["paused"],
+        "pending": len(pending),
+        "sending": _queue_state["sending"],
+        "sent": _queue_state["sent"],
+        "errors": _queue_state["errors"],
+        "enqueued": _queue_state["enqueued"],
+        "last_sent_at": _queue_state["last_sent_at"],
+        "hours": by_hour,
+    }
+
+
+async def _restore_homologate_queue() -> None:
+    try:
+        rows = await db.homologate_queue.find({"status": "queued"}).sort("enqueued_at", 1).to_list(2000)
+    except Exception:
+        return
+    for row in rows:
+        item = {
+            "queue_id": row.get("queue_id"),
+            "message_id": row.get("message_id"),
+            "hour": row.get("hour"),
+            "payload": row.get("payload"),
+            "payload_hash": row.get("payload_hash"),
+            "i": row.get("i"),
+            "status": "queued",
+        }
+        if item["queue_id"] and item.get("payload"):
+            _queue.append(item)
+    if _queue:
+        _queue_wake.set()
+        log.info("cola homologate restaurada: %s pendientes", len(_queue))
+
+
+async def _enqueue_candidates(items: list[dict[str, Any]]) -> dict[str, Any]:
+    added = 0
+    skipped = 0
+    async with _queue_lock:
+        pending_hashes = {x.get("payload_hash") for x in _queue if x.get("status") == "queued"}
+        if _queue_state.get("sending") and _queue_state["sending"].get("payload_hash"):
+            pending_hashes.add(_queue_state["sending"]["payload_hash"])
+        for item in items:
+            ph = item.get("payload_hash")
+            if not item.get("payload"):
+                skipped += 1
+                continue
+            if ph and ph in pending_hashes:
+                skipped += 1
+                continue
+            queue_id = str(uuid.uuid4())
+            job = {
+                "queue_id": queue_id,
+                "message_id": item.get("message_id"),
+                "hour": item.get("hour"),
+                "payload": item["payload"],
+                "payload_hash": ph,
+                "i": item.get("i"),
+                "addr": item.get("addr"),
+                "ip": item.get("ip"),
+                "status": "queued",
+                "enqueued_at": _now(),
+            }
+            _queue.append(job)
+            pending_hashes.add(ph)
+            added += 1
+            _queue_state["enqueued"] += 1
+            try:
+                await db.homologate_queue.insert_one(dict(job))
+            except Exception:
+                log.exception("no se persistió item de cola")
+    if added:
+        _queue_wake.set()
+    return {"added": added, "skipped": skipped, "pending": sum(1 for x in _queue if x.get("status") == "queued")}
+
+
+async def _homologate_queue_worker() -> None:
+    _queue_state["running"] = True
+    while True:
+        try:
+            if _queue_state["paused"] or not any(x.get("status") == "queued" for x in _queue):
+                _queue_wake.clear()
+                await _queue_wake.wait()
+                continue
+            async with _queue_lock:
+                job = next((x for x in _queue if x.get("status") == "queued"), None)
+                if job:
+                    job["status"] = "sending"
+                    _queue_state["sending"] = {
+                        "i": job.get("i"),
+                        "hour": job.get("hour"),
+                        "payload_hash": job.get("payload_hash"),
+                    }
+            if not job:
+                continue
+            last = _queue_state.get("last_sent_at")
+            gap = homo.env_queue_interval_s()
+            if last and gap > 0:
+                wait = gap - (time.monotonic() - last)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+            if not homo.env_enabled() or not homo.env_url():
+                http_status, err = None, "no_url"
+            else:
+                http_status, err = await _post_standard(job["payload"])
+            now = _now()
+            ok = bool(http_status)
+            log_doc = {
+                "ts": now,
+                "i": job.get("i"),
+                "host": homo.destination_host(),
+                "http_status": http_status,
+                "error": err,
+                "status": "ok" if ok else "error",
+                "payload_hash": job.get("payload_hash"),
+                "hour": job.get("hour"),
+                "message_id": job.get("message_id"),
+                "source": "queue",
+            }
+            try:
+                await db.homologate_log.insert_one(log_doc)
+                await db.homologate_queue.update_one(
+                    {"queue_id": job["queue_id"]},
+                    {"$set": {"status": "ok" if ok else "error", "http_status": http_status, "error": err, "sent_at": now}},
+                )
+                if job.get("message_id"):
+                    try:
+                        mid = ObjectId(job["message_id"])
+                        await db.messages.update_one(
+                            {"_id": mid},
+                            {
+                                "$set": {
+                                    "homologate_status": "ok" if ok else "error",
+                                    "homologate_reason": "queue_sent" if ok else (err or "queue_error"),
+                                    "homologate_http": http_status,
+                                    "homologate_i": job.get("i"),
+                                }
+                            },
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                log.exception("cola homologate: no se pudo auditar")
+            async with _queue_lock:
+                job["status"] = "ok" if ok else "error"
+                try:
+                    _queue.remove(job)
+                except ValueError:
+                    pass
+                _queue_state["sending"] = None
+                _queue_state["last_sent_at"] = time.monotonic()
+                if ok:
+                    _queue_state["sent"] += 1
+                else:
+                    _queue_state["errors"] += 1
+            log.info(
+                "cola homologate %s i=%s hour=%s pending=%s",
+                "ok" if ok else f"error:{err}",
+                job.get("i"),
+                job.get("hour"),
+                sum(1 for x in _queue if x.get("status") == "queued"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("cola homologate worker")
+            await asyncio.sleep(1)
+
+
 # ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
@@ -590,7 +842,99 @@ async def homologate_status(limit: int = 20):
         "pending": pending,
         "errors": errors,
         "recent": logs,
+        "queue": _queue_snapshot(),
     }
+
+
+@app.get("/api/homologate/candidates")
+async def homologate_candidates(
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    date: str | None = None,
+    hour: str | None = None,
+    limit: int = 5000,
+):
+    """Explora el histórico y lista tramas que se pueden homologar al JSON estándar."""
+    items = await _scan_candidates(
+        addr=addr, ip=ip, session_id=session_id, date=date, hour=hour, limit=limit
+    )
+    hours: dict[str, int] = {}
+    for it in items:
+        hk = it["hour"]
+        hours[hk] = hours.get(hk, 0) + 1
+    return {
+        "count": len(items),
+        "hours": [{"hour": k, "count": hours[k]} for k in sorted(hours.keys(), reverse=True)],
+        "configured": bool(homo.env_url()),
+        "enabled": homo.env_enabled(),
+        "host": homo.destination_host(),
+        "unit": homo.env_unit(),
+        "interval_s": homo.env_queue_interval_s(),
+        "items": items,
+        "queue": _queue_snapshot(),
+    }
+
+
+@app.get("/api/homologate/queue")
+async def homologate_queue_get():
+    return _queue_snapshot()
+
+
+@app.post("/api/homologate/enqueue")
+async def homologate_enqueue(body: HomologateEnqueueBody):
+    """Encola tramas homologables. Si ya hay un envío, se agregan al final (5 s entre POST)."""
+    if not homo.env_enabled() or not homo.env_url():
+        raise HTTPException(400, "HOMOLOGATE_URL no configurada")
+    items: list[dict[str, Any]] = []
+    if body.ids:
+        oids = []
+        for raw in body.ids:
+            try:
+                oids.append(ObjectId(raw))
+            except Exception:
+                continue
+        if oids:
+            cursor = db.messages.find({"_id": {"$in": oids}})
+            rows = await cursor.to_list(len(oids))
+            for doc in rows:
+                item = _candidate_from_doc(doc)
+                if item:
+                    items.append(item)
+    else:
+        items = await _scan_candidates(
+            addr=body.addr, ip=body.ip, date=body.date, hour=body.hour, limit=10000
+        )
+    if not items:
+        return {"ok": True, "added": 0, "skipped": 0, "queue": _queue_snapshot(), "detail": "sin tramas homologables"}
+    result = await _enqueue_candidates(items)
+    result["ok"] = True
+    result["queue"] = _queue_snapshot()
+    return result
+
+
+@app.post("/api/homologate/queue/clear")
+async def homologate_queue_clear():
+    """Quita pendientes que aún no se están enviando."""
+    removed = 0
+    async with _queue_lock:
+        keep: deque[dict[str, Any]] = deque()
+        ids = []
+        for item in _queue:
+            if item.get("status") == "queued":
+                removed += 1
+                if item.get("queue_id"):
+                    ids.append(item["queue_id"])
+            else:
+                keep.append(item)
+        _queue.clear()
+        _queue.extend(keep)
+    if ids:
+        await db.homologate_queue.update_many(
+            {"queue_id": {"$in": ids}},
+            {"$set": {"status": "cancelled", "cancelled_at": _now()}},
+        )
+    return {"ok": True, "removed": removed, "queue": _queue_snapshot()}
 
 
 @app.get("/api/devices")

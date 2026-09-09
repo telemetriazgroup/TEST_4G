@@ -86,6 +86,29 @@ body {
 .dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(31, 143, 78, 0.2); }
 .dot.off { background: var(--off); }
 
+.queue-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 0 1.5rem 0.45rem;
+  padding: 0.4rem 0.7rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.queue-bar .btn { font-size: 0.74rem; padding: 0.28rem 0.55rem; }
+
+.hour-export .btn.homo {
+  background: rgba(13, 122, 111, 0.12);
+  border-color: rgba(13, 122, 111, 0.35);
+  color: var(--accent);
+}
+
 .tabs {
   flex-shrink: 0;
   display: flex;
