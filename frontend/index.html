@@ -44,6 +44,10 @@
       Archivo por día
       <small>buscar días anteriores</small>
     </button>
+    <button type="button" class="tab" data-tab="sent" role="tab" aria-selected="false">
+      Enviadas
+      <small>vivo + histórico · POST</small>
+    </button>
   </nav>
 
   <main class="layout">
@@ -183,6 +187,46 @@
           <p id="archiveMeta" class="hint">Los datos no se borran — quedan en MongoDB.</p>
         </div>
       </div>
+    </section>
+
+    <!-- ENVIADAS (homologación) -->
+    <section class="panel monitor tab-panel" id="panelSent">
+      <div class="panel-head">
+        <h2 id="sentTitle">Tramas enviadas</h2>
+        <span id="sentCount" class="badge">0</span>
+        <div class="filters">
+          <select id="sentStatus" aria-label="Estado">
+            <option value="all" selected>Todos los estados</option>
+            <option value="ok">Enviadas OK</option>
+            <option value="error">Error</option>
+            <option value="queued">En cola</option>
+          </select>
+          <select id="sentSource" aria-label="Origen">
+            <option value="all" selected>Vivo + histórico</option>
+            <option value="live">Solo en vivo</option>
+            <option value="queue">Solo histórico (cola)</option>
+          </select>
+        </div>
+        <button type="button" id="btnRefreshSent" class="btn primary">Actualizar</button>
+      </div>
+      <div id="sentWrap" class="hours-wrap">
+        <table class="capture-table" id="sentTable">
+          <thead>
+            <tr>
+              <th>Envío</th>
+              <th>Origen</th>
+              <th>Estado</th>
+              <th>i</th>
+              <th>Hora trama</th>
+              <th>HTTP</th>
+              <th>JSON estándar</th>
+            </tr>
+          </thead>
+          <tbody id="sentBody"></tbody>
+        </table>
+      </div>
+      <p id="emptySent" class="empty show">Aún no hay envíos. Las tramas en vivo y las encoladas del histórico aparecen aquí cuando se POST-ean.</p>
+      <p id="sentMeta" class="hint">—</p>
     </section>
   </main>
 

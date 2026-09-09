@@ -535,10 +535,13 @@ async def _homologate_after_persist(doc: dict[str, Any]) -> None:
             "error": err,
             "status": "ok" if http_status else "error",
             "payload_hash": payload_hash,
+            "payload": payload,
+            "hour": homo.hour_key(doc.get("ts")),
             "session_id": doc.get("session_id"),
             "addr": doc.get("addr"),
             "ip": doc.get("ip"),
             "message_ts": doc.get("ts"),
+            "source": "live",
         }
         await db.homologate_log.insert_one(log_doc)
         if http_status:
@@ -749,13 +752,17 @@ async def _homologate_queue_worker() -> None:
             log_doc = {
                 "ts": now,
                 "i": job.get("i"),
+                "opcodes": list((job.get("payload") or {}).keys()),
                 "host": homo.destination_host(),
                 "http_status": http_status,
                 "error": err,
                 "status": "ok" if ok else "error",
                 "payload_hash": job.get("payload_hash"),
+                "payload": job.get("payload"),
                 "hour": job.get("hour"),
                 "message_id": job.get("message_id"),
+                "addr": job.get("addr"),
+                "ip": job.get("ip"),
                 "source": "queue",
             }
             try:
@@ -842,6 +849,64 @@ async def homologate_status(limit: int = 20):
         "pending": pending,
         "errors": errors,
         "recent": logs,
+        "queue": _queue_snapshot(),
+    }
+
+
+@app.get("/api/homologate/sent")
+async def homologate_sent(
+    status: str | None = None,
+    source: str | None = None,
+    date: str | None = None,
+    hour: str | None = None,
+    ident: str | None = None,
+    limit: int = 500,
+):
+    """Consulta tramas estándar enviadas (vivo + histórico) y su resultado POST."""
+    q: dict[str, Any] = {}
+    if status and status != "all":
+        q["status"] = status
+    if source and source != "all":
+        q["source"] = source
+    if ident:
+        q["i"] = ident
+    if hour:
+        q["hour"] = hour
+    elif date:
+        q["hour"] = {"$regex": f"^{date}"}
+    limit = max(1, min(limit, 2000))
+    cursor = db.homologate_log.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
+    rows = await cursor.to_list(limit)
+    pending = []
+    for item in list(_queue):
+        if item.get("status") not in {"queued", "sending"}:
+            continue
+        pending.append(
+            {
+                "ts": item.get("enqueued_at"),
+                "i": item.get("i"),
+                "status": item.get("status"),
+                "source": "queue",
+                "hour": item.get("hour"),
+                "payload": item.get("payload"),
+                "payload_hash": item.get("payload_hash"),
+                "addr": item.get("addr"),
+                "ip": item.get("ip"),
+                "host": homo.destination_host(),
+                "http_status": None,
+                "error": None,
+            }
+        )
+    ok = sum(1 for r in rows if r.get("status") == "ok")
+    err = sum(1 for r in rows if r.get("status") == "error")
+    return {
+        "items": pending + rows,
+        "count": len(pending) + len(rows),
+        "pending": len(pending),
+        "ok": ok,
+        "errors": err,
+        "configured": bool(homo.env_url()),
+        "host": homo.destination_host(),
         "queue": _queue_snapshot(),
     }
 

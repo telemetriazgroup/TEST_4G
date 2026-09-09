@@ -56,6 +56,14 @@
     btnHomoScan: document.getElementById("btnHomoScan"),
     btnHomoEnqueueAll: document.getElementById("btnHomoEnqueueAll"),
     btnHomoClear: document.getElementById("btnHomoClear"),
+    panelSent: document.getElementById("panelSent"),
+    sentBody: document.getElementById("sentBody"),
+    sentCount: document.getElementById("sentCount"),
+    sentMeta: document.getElementById("sentMeta"),
+    emptySent: document.getElementById("emptySent"),
+    sentStatus: document.getElementById("sentStatus"),
+    sentSource: document.getElementById("sentSource"),
+    btnRefreshSent: document.getElementById("btnRefreshSent"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -251,8 +259,10 @@
       els.panelSerial.classList.toggle("active", activeTab === "serial");
       els.panelHistory.classList.toggle("active", activeTab === "history");
       els.panelArchive.classList.toggle("active", activeTab === "archive");
+      if (els.panelSent) els.panelSent.classList.toggle("active", activeTab === "sent");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
+      if (activeTab === "sent") loadSent();
     });
   });
 
@@ -1128,6 +1138,68 @@
     if (activeTab === "archive" && archiveSelectedDate) enqueueHomologate({ date: archiveSelectedDate });
     else enqueueHomologate({});
   });
+  function sourceLabel(src) {
+    if (src === "live") return "En vivo";
+    if (src === "queue") return "Histórico";
+    return src || "—";
+  }
+
+  function statusLabel(st) {
+    if (st === "ok") return "Enviada";
+    if (st === "error") return "Error";
+    if (st === "queued") return "En cola";
+    if (st === "sending") return "Enviando";
+    return st || "—";
+  }
+
+  function renderSent(items, meta) {
+    if (!els.sentBody) return;
+    els.sentBody.innerHTML = "";
+    const statusF = (els.sentStatus && els.sentStatus.value) || "all";
+    const rows = (items || []).filter((it) => statusF === "all" || it.status === statusF);
+    els.emptySent.classList.toggle("show", rows.length === 0);
+    if (els.sentCount) els.sentCount.textContent = String(rows.length);
+    if (els.sentMeta) {
+      els.sentMeta.textContent =
+        `${rows.length} registro(s)` +
+        (meta && meta.ok != null ? ` · OK ${meta.ok} · error ${meta.errors} · cola ${meta.pending}` : "") +
+        (meta && meta.host ? ` · ${meta.host}` : "");
+    }
+    for (const it of rows) {
+      const tr = document.createElement("tr");
+      const payload = it.payload || {};
+      const preview = payload.d02
+        ? String(payload.d02).slice(0, 48) + (payload.d02.length > 48 ? "…" : "")
+        : "";
+      const json = payload.i
+        ? JSON.stringify(payload, null, 2)
+        : it.error || "—";
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+        `<td><span class="type-badge src-${esc(it.source || "queue")}">${esc(sourceLabel(it.source))}</span></td>` +
+        `<td><span class="type-badge st-${esc(it.status || "")}">${esc(statusLabel(it.status))}</span></td>` +
+        `<td class="mono">${esc(it.i || "—")}</td>` +
+        `<td class="mono muted">${esc(it.hour || "—")}</td>` +
+        `<td class="mono">${esc(it.http_status != null ? it.http_status : it.error || "—")}</td>` +
+        `<td class="payload-cell"><details><summary>${esc(preview || "ver JSON")}</summary><pre>${esc(json)}</pre></details></td>`;
+      els.sentBody.appendChild(tr);
+    }
+  }
+
+  async function loadSent() {
+    if (els.sentMeta) els.sentMeta.textContent = "Cargando envíos…";
+    const p = new URLSearchParams();
+    if (els.sentSource && els.sentSource.value !== "all") p.set("source", els.sentSource.value);
+    p.set("limit", "500");
+    try {
+      const r = await fetch(`${API}/api/homologate/sent?${p}`);
+      const data = await r.json();
+      renderSent(data.items || [], data);
+    } catch (e) {
+      if (els.sentMeta) els.sentMeta.textContent = String(e);
+    }
+  }
+
   els.btnHomoClear.addEventListener("click", async () => {
     try {
       const r = await fetch(`${API}/api/homologate/queue/clear`, { method: "POST" });
@@ -1137,7 +1209,14 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
+  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
+  if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
+  if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+
   setInterval(refreshHomoQueue, 2000);
+  setInterval(() => {
+    if (activeTab === "sent") loadSent();
+  }, 4000);
 
   els.btnSweep.addEventListener("click", async () => {
     try {
