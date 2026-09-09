@@ -79,8 +79,35 @@ class ConnectBody(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+BSON_INT_MIN = -(2**63)
+BSON_INT_MAX = 2**63 - 1
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _bson_safe_int(value: Any) -> int | None:
+    """MongoDB BSON solo admite int64 con signo (8 bytes)."""
+    if value is None or isinstance(value, bool):
+        return None if value is None else value
+    if not isinstance(value, int):
+        return None
+    if BSON_INT_MIN <= value <= BSON_INT_MAX:
+        return value
+    return None
+
+
+def _sanitize_for_mongo(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return _bson_safe_int(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_for_mongo(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_mongo(v) for v in value]
+    return value
 
 
 def _history_query(
@@ -315,13 +342,18 @@ async def internal_telemetry(body: TelemetryBody):
         "hex": body.hex,
         "decimal": body.decimal,
         "value_type": value_type,
-        "int_value": body.int_value,
-        "frame_len": body.frame_len,
-        "tcp_header": body.tcp_header,
+        "int_value": _bson_safe_int(body.int_value),
+        "frame_len": _bson_safe_int(body.frame_len),
+        "tcp_header": _sanitize_for_mongo(body.tcp_header) if body.tcp_header else None,
         "encoding": body.encoding,
         "ts": now,
     }
-    inserted = await db.messages.insert_one(doc)
+    try:
+        inserted = await db.messages.insert_one(doc)
+    except OverflowError:
+        log.warning("int overflow en telemetry ip=%s; se guarda sin enteros grandes", body.ip)
+        doc = _sanitize_for_mongo(doc)
+        inserted = await db.messages.insert_one(doc)
     doc["_id"] = inserted.inserted_id
 
     # Contadores de sesión

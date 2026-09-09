@@ -358,14 +358,29 @@ def build_tcp_header(
     }
 
 
+BSON_INT_MIN = -(2**63)
+BSON_INT_MAX = 2**63 - 1
+
+
+def bson_safe_int(value: int | None) -> int | None:
+    """BSON int64 firmado: 8 bytes unsigned puede pasarse de 2^63-1."""
+    if value is None:
+        return None
+    if BSON_INT_MIN <= value <= BSON_INT_MAX:
+        return value
+    return None
+
+
 def bytes_to_decimal(raw: bytes) -> tuple[str, int | None]:
     """
     Convierte trama a decimal:
     - decimal: bytes separados por espacio (ej. '10 255 0')
-    - decimal_int: entero big-endian si la trama tiene 1..8 bytes
+    - decimal_int: entero big-endian solo si cabe en int64 BSON
     """
     decimal = " ".join(str(b) for b in raw)
-    decimal_int = int.from_bytes(raw, byteorder="big", signed=False) if 1 <= len(raw) <= 8 else None
+    if not (1 <= len(raw) <= 8):
+        return decimal, None
+    decimal_int = bson_safe_int(int.from_bytes(raw, byteorder="big", signed=False))
     return decimal, decimal_int
 
 
@@ -403,8 +418,9 @@ def notify_data(
         "value_type": value_type,
         "ts": dt.datetime.utcnow().isoformat() + "Z",
     }
-    if int_value is not None:
-        payload["int_value"] = int_value
+    safe_int = bson_safe_int(int_value) if isinstance(int_value, int) else None
+    if safe_int is not None:
+        payload["int_value"] = safe_int
     if decimal is not None:
         payload["decimal"] = decimal
     if encoding:
@@ -566,7 +582,7 @@ def parse_chunks(line: str) -> dict[str, Any]:
                 {
                     "kind": "int",
                     "value_type": "int",
-                    "int_value": n,
+                    "int_value": bson_safe_int(n),
                     "text": str(n),
                     "hex": payload.hex(),
                     "payload_bytes": payload,
