@@ -88,6 +88,12 @@ def hour_key(ts: str | None) -> str:
         return "desconocida"
 
 
+def date_key(ts: str | None) -> str:
+    """YYYY-MM-DD en zona local (Lima), alineado con hour_key."""
+    hk = hour_key(ts)
+    return hk[:10] if len(hk) >= 10 and hk != "desconocida" else "desconocida"
+
+
 def destination_host(url: str | None = None) -> str | None:
     target = url if url is not None else env_url()
     if not target:

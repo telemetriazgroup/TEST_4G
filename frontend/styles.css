@@ -524,6 +524,33 @@ body {
   color: var(--accent);
   font-weight: 600;
 }
+
+.status-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.55rem;
+  margin: 0 0 0.75rem;
+  flex: 0 0 auto;
+}
+.status-kpi {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+}
+.status-kpi .k { color: var(--muted); font-size: 0.7rem; display: block; }
+.status-kpi .v { font-weight: 700; font-size: 1.05rem; font-family: var(--font-mono); }
+.status-json {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+}
+.status-hist { margin-top: 0.75rem; font-size: 0.78rem; color: var(--muted); }
 .type-tcp_header { background: #e4e4e4; color: #333; }
 
 .term .type-badge {

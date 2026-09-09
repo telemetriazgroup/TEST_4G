@@ -26,6 +26,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
 import homologate as homo
+import decode_tk
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g")
@@ -47,6 +48,8 @@ log = logging.getLogger("test_4g")
 _queue_lock = asyncio.Lock()
 _queue: deque[dict[str, Any]] = deque()
 _queue_wake = asyncio.Event()
+_decode_q: deque[dict[str, Any]] = deque()
+_decode_wake = asyncio.Event()
 _queue_state: dict[str, Any] = {
     "running": False,
     "paused": False,
@@ -258,8 +261,15 @@ async def startup() -> None:
     await db.homologate_log.create_index([("status", 1), ("ts", -1)])
     await db.messages.create_index([("homologate_status", 1), ("ts", -1)])
     await db.homologate_queue.create_index([("status", 1), ("enqueued_at", 1)])
+    await db.seguimiento.create_index([("date", 1), ("ts", -1)])
+    await db.seguimiento.create_index([("hour", 1), ("ts", -1)])
+    await db.seguimiento.create_index([("i", 1), ("date", 1), ("ts", -1)])
+    await db.seguimiento.create_index([("ip", 1), ("date", 1), ("ts", -1)])
+    await db.seguimiento.create_index([("message_id", 1)], unique=True, sparse=True)
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
+    asyncio.create_task(_seguimiento_worker())
+    asyncio.create_task(_backfill_seguimiento())
 
 
 @app.on_event("shutdown")
@@ -394,6 +404,7 @@ async def internal_telemetry(body: TelemetryBody):
     await db.sessions.update_one({"session_id": session_id}, update_session, upsert=False)
 
     asyncio.create_task(_homologate_after_persist(doc))
+    _enqueue_seguimiento(doc)
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -582,6 +593,128 @@ async def _homologate_after_persist(doc: dict[str, Any]) -> None:
     except Exception:
         log.exception("homologate task falló")
         await _mark_message(doc, {"homologate_status": "error", "homologate_reason": "internal"})
+
+
+def _looks_decodable(doc: dict[str, Any]) -> bool:
+    if (doc.get("direction") or "rx").lower() != "rx":
+        return False
+    if (doc.get("value_type") or "") == "tcp_header":
+        return False
+    text = str(doc.get("text") or "").upper()
+    return "82A7" in text or '"D0' in text
+
+
+def _decode_job_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    mid = doc.get("_id")
+    return {
+        "message_id": str(mid) if mid else None,
+        "ts": doc.get("ts"),
+        "text": doc.get("text"),
+        "addr": doc.get("addr"),
+        "ip": doc.get("ip"),
+        "session_id": doc.get("session_id"),
+        "enqueued_at": _now(),
+    }
+
+
+def _enqueue_seguimiento(doc: dict[str, Any]) -> None:
+    """Encola decodificación. Independiente del POST de homologación."""
+    if not _looks_decodable(doc):
+        return
+    _decode_q.append(_decode_job_from_doc(doc))
+    _decode_wake.set()
+
+
+async def _save_seguimiento(job: dict[str, Any], *, notify: bool = True) -> dict[str, Any] | None:
+    mid = job.get("message_id")
+    if mid:
+        exists = await db.seguimiento.find_one({"message_id": mid}, {"_id": 1})
+        if exists:
+            return None
+    decoded = decode_tk.decode_unit_status(job.get("text") or "", ts=job.get("ts"))
+    if not decoded:
+        return None
+    ts = job.get("ts") or decoded.get("ts")
+    row = _sanitize_for_mongo(
+        {
+            "ts": ts,
+            "decoded_at": _now(),
+            "date": homo.date_key(ts),
+            "hour": homo.hour_key(ts),
+            "i": decoded.get("i"),
+            "container_id": (decoded.get("snapshot") or {}).get("container_id"),
+            "addr": job.get("addr"),
+            "ip": job.get("ip"),
+            "session_id": job.get("session_id"),
+            "message_id": mid,
+            "opcodes": decoded.get("opcodes") or [],
+            "crc_all_ok": decoded.get("crc_all_ok"),
+            "snapshot": decoded.get("snapshot"),
+            "sensors": decoded.get("sensors"),
+            "control": decoded.get("control"),
+            "io": decoded.get("io"),
+            "caption": decoded.get("caption"),
+            "alarms": decoded.get("alarms"),
+        }
+    )
+    try:
+        await db.seguimiento.insert_one(row)
+    except Exception as e:
+        if "E11000" in str(e) or "duplicate" in str(e).lower():
+            return None
+        raise
+    if mid:
+        try:
+            await db.messages.update_one(
+                {"_id": ObjectId(mid)},
+                {"$set": {"seguimiento": True, "seguimiento_date": row["date"]}},
+            )
+        except Exception:
+            log.exception("no se pudo marcar mensaje seguimiento")
+    if notify:
+        await broadcast({"type": "seguimiento", **_jsonable(row)})
+    return row
+
+
+async def _seguimiento_worker() -> None:
+    """Proceso aparte del POST: decodifica y persiste datos de seguimiento."""
+    while True:
+        try:
+            if not _decode_q:
+                _decode_wake.clear()
+                await _decode_wake.wait()
+                continue
+            job = _decode_q.popleft()
+            await _save_seguimiento(job)
+        except Exception:
+            log.exception("seguimiento worker")
+            await asyncio.sleep(0.2)
+
+
+async def _backfill_seguimiento(limit: int = 2000) -> int:
+    """Decodifica tramas RX ya guardadas que aún no están en seguimiento."""
+    try:
+        q = {
+            "direction": "rx",
+            "value_type": {"$ne": "tcp_header"},
+            "seguimiento": {"$ne": True},
+        }
+        rows = await db.messages.find(q).sort("ts", -1).limit(limit).to_list(limit)
+        n = 0
+        for doc in reversed(rows):
+            if not _looks_decodable(doc):
+                continue
+            try:
+                if await _save_seguimiento(_decode_job_from_doc(doc), notify=False):
+                    n += 1
+            except Exception:
+                log.exception("backfill seguimiento doc=%s", doc.get("_id"))
+        if n:
+            log.info("seguimiento backfill: %s decodificados", n)
+        return n
+    except Exception:
+        log.exception("backfill seguimiento falló")
+        return 0
 
 
 def _candidate_from_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
@@ -909,6 +1042,77 @@ async def homologate_sent(
         "host": homo.destination_host(),
         "queue": _queue_snapshot(),
     }
+
+
+def _seguimiento_query(
+    *,
+    ident: str | None = None,
+    ip: str | None = None,
+    date: str | None = None,
+    hour: str | None = None,
+) -> dict[str, Any]:
+    q: dict[str, Any] = {}
+    if ident:
+        q["i"] = ident
+    if ip:
+        q["ip"] = ip
+    if hour:
+        q["hour"] = hour
+    elif date:
+        q["date"] = date
+    return q
+
+
+@app.get("/api/seguimiento/days")
+async def seguimiento_days(ident: str | None = None, ip: str | None = None, limit: int = 365):
+    q = _seguimiento_query(ident=ident, ip=ip)
+    limit = max(1, min(limit, 1000))
+    pipeline: list[dict[str, Any]] = [
+        {"$match": q},
+        {"$group": {"_id": "$date", "count": {"$sum": 1}}},
+        {"$sort": {"_id": -1}},
+        {"$limit": limit},
+    ]
+    rows = await db.seguimiento.aggregate(pipeline).to_list(limit)
+    days = [{"date": r["_id"], "count": r["count"]} for r in rows if r.get("_id")]
+    return {"days": days, "count": len(days)}
+
+
+@app.get("/api/seguimiento")
+async def list_seguimiento(
+    date: str | None = None,
+    hour: str | None = None,
+    ident: str | None = None,
+    ip: str | None = None,
+    limit: int = 500,
+):
+    q = _seguimiento_query(ident=ident, ip=ip, date=date, hour=hour)
+    limit = max(1, min(limit, 2000))
+    cursor = db.seguimiento.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
+    rows = await cursor.to_list(limit)
+    hours: dict[str, int] = {}
+    for r in rows:
+        hk = r.get("hour") or "desconocida"
+        hours[hk] = hours.get(hk, 0) + 1
+    return {
+        "date": date,
+        "hour": hour,
+        "latest": rows[0] if rows else None,
+        "items": rows,
+        "hours": [{"hour": k, "count": hours[k]} for k in sorted(hours.keys(), reverse=True)],
+        "count": len(rows),
+    }
+
+
+@app.get("/api/unit-status")
+async def list_unit_status(
+    ident: str | None = None,
+    ip: str | None = None,
+    date: str | None = None,
+    limit: int = 50,
+):
+    """Alias de /api/seguimiento (compatibilidad)."""
+    return await list_seguimiento(date=date, ident=ident, ip=ip, limit=limit)
 
 
 @app.get("/api/homologate/candidates")

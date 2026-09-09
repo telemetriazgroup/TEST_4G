@@ -48,6 +48,10 @@
       Enviadas
       <small>vivo + histórico · POST</small>
     </button>
+    <button type="button" class="tab" data-tab="status" role="tab" aria-selected="false">
+      Seguimiento
+      <small>decodificado · por fecha</small>
+    </button>
   </nav>
 
   <main class="layout">
@@ -227,6 +231,33 @@
       </div>
       <p id="emptySent" class="empty show">Aún no hay envíos. Las tramas en vivo y las encoladas del histórico aparecen aquí cuando se POST-ean.</p>
       <p id="sentMeta" class="hint">—</p>
+    </section>
+
+    <!-- SEGUIMIENTO -->
+    <section class="panel monitor tab-panel" id="panelStatus">
+      <div class="panel-head">
+        <h2 id="statusTitle">Seguimiento</h2>
+        <span id="statusBadge" class="badge">—</span>
+        <div class="day-nav">
+          <button type="button" id="btnStatusPrev" class="btn ghost" title="Día anterior">◀</button>
+          <input type="date" id="statusDate" aria-label="Fecha" />
+          <button type="button" id="btnStatusNext" class="btn ghost" title="Día siguiente">▶</button>
+        </div>
+        <button type="button" id="btnRefreshStatus" class="btn primary">Cargar día</button>
+      </div>
+      <div class="archive-layout">
+        <aside class="day-list-wrap">
+          <div class="day-list-head">Días con seguimiento</div>
+          <ul id="statusDayList" class="day-list"></ul>
+          <p id="emptyStatusDays" class="empty show">Sin días decodificados aún.</p>
+        </aside>
+        <div class="archive-content">
+          <div id="statusKpis" class="status-kpis"></div>
+          <div id="statusHours" class="hours-wrap"></div>
+          <p id="emptyStatus" class="empty show">Cuando llegue una trama decodificable (d01–d05) se guarda aquí. El POST al link corre aparte.</p>
+          <p id="statusMeta" class="hint">Tabla seguimiento · consulta por fecha (zona Lima)</p>
+        </div>
+      </div>
     </section>
   </main>
 

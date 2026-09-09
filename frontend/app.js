@@ -64,6 +64,19 @@
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
+    panelStatus: document.getElementById("panelStatus"),
+    statusTitle: document.getElementById("statusTitle"),
+    statusKpis: document.getElementById("statusKpis"),
+    statusHours: document.getElementById("statusHours"),
+    statusBadge: document.getElementById("statusBadge"),
+    statusMeta: document.getElementById("statusMeta"),
+    emptyStatus: document.getElementById("emptyStatus"),
+    emptyStatusDays: document.getElementById("emptyStatusDays"),
+    statusDayList: document.getElementById("statusDayList"),
+    statusDate: document.getElementById("statusDate"),
+    btnStatusPrev: document.getElementById("btnStatusPrev"),
+    btnStatusNext: document.getElementById("btnStatusNext"),
+    btnRefreshStatus: document.getElementById("btnRefreshStatus"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -76,6 +89,9 @@
   /** @type {Array<{date:string,count:number,rx:number,tx:number}>} */
   let archiveDays = [];
   let archiveSelectedDate = "";
+  let statusSelectedDate = "";
+  /** @type {Array<{date:string,count:number}>} */
+  let statusDays = [];
   let activeTab = "serial";
   let ws;
   /** horas expandidas en histórico */
@@ -260,9 +276,11 @@
       els.panelHistory.classList.toggle("active", activeTab === "history");
       els.panelArchive.classList.toggle("active", activeTab === "archive");
       if (els.panelSent) els.panelSent.classList.toggle("active", activeTab === "sent");
+      if (els.panelStatus) els.panelStatus.classList.toggle("active", activeTab === "status");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
+      if (activeTab === "status") loadSeguimiento();
     });
   });
 
@@ -1030,6 +1048,11 @@
     els.sendHint.textContent = selected
       ? `Sesión ${selected.addr} — envío / export JSON`
       : "Selecciona un dispositivo (IP:puerto) para enviar o exportar.";
+    if (els.statusTitle) {
+      els.statusTitle.textContent = selected
+        ? `Seguimiento · ${selected.ip}:${selected.port}`
+        : "Seguimiento";
+    }
 
     [...els.deviceList.children].forEach((li, i) => {
       if (i === 0) li.classList.toggle("active", !selected);
@@ -1039,6 +1062,8 @@
     await refreshSerial();
     if (activeTab === "history") await loadHistory();
     if (activeTab === "archive") await loadArchiveTab();
+    if (activeTab === "sent") await loadSent();
+    if (activeTab === "status") await loadSeguimiento();
   }
 
   // ---- WS ----
@@ -1056,6 +1081,9 @@
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === "message") pushLive(msg);
+        if (msg.type === "seguimiento" && activeTab === "status") {
+          if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
+        }
         if (
           msg.type === "connect" ||
           msg.type === "disconnect" ||
@@ -1212,6 +1240,224 @@
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+
+  const MODE_ES = {
+    chilled: "Refrigerado",
+    frozen: "Congelado",
+    stop: "Parado",
+    defrost_begin: "Inicio deshielo",
+    defrost_ended: "Fin deshielo",
+    function_test_begin: "Inicio test función",
+    function_test: "Test función",
+    brief_pti_begin: "Inicio PTI breve",
+    chill_pti_begin: "Inicio PTI frío",
+    afam_pti_begin: "Inicio PTI AFAM+",
+    rh_pti_begin: "Inicio PTI rH",
+    pti_begin: "Inicio PTI",
+    pti: "PTI",
+    manual_function_test_begin: "Inicio test manual",
+    manual_function_test: "Test manual",
+    runtime_probe_test: "Test sonda runtime",
+    auto_unit_test: "Auto test unidad",
+    unit_autoconfiguration: "Autoconfiguración",
+    external_test_begin: "Inicio test externo",
+    external_test: "Test externo",
+    shutdown_begin: "Inicio apagado",
+    shutdown: "Apagado",
+    shutdown_end: "Fin apagado",
+    pti_chill_pulldown: "PTI pulldown frío",
+    pti_chill_maintaining: "PTI mantenimiento frío",
+    pti_defrosting: "PTI deshielo",
+    pti_frozen_pulldown: "PTI pulldown congelado",
+    pti_ended_failed: "PTI fallido",
+    pti_ended_passed: "PTI aprobado",
+  };
+
+  function fmtStatusVal(v, suffix) {
+    if (v == null || v === "") return "—";
+    if (typeof v === "boolean") return v ? "Sí" : "No";
+    return suffix ? `${v}${suffix}` : String(v);
+  }
+
+  function kpiHtml(label, value) {
+    return `<div class="status-kpi"><span class="k">${esc(label)}</span><span class="v">${esc(value)}</span></div>`;
+  }
+
+  function todayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function renderStatusDays() {
+    if (!els.statusDayList) return;
+    els.statusDayList.innerHTML = "";
+    if (els.emptyStatusDays) els.emptyStatusDays.classList.toggle("show", statusDays.length === 0);
+    for (const day of statusDays) {
+      const li = document.createElement("li");
+      li.dataset.date = day.date;
+      if (day.date === statusSelectedDate) li.classList.add("active");
+      li.innerHTML =
+        `<span class="date">${esc(formatDayLabel(day.date))}</span>` +
+        `<span class="meta">${esc(String(day.count))} registro(s)</span>`;
+      li.addEventListener("click", () => selectStatusDay(day.date));
+      els.statusDayList.appendChild(li);
+    }
+  }
+
+  function renderSeguimientoKpis(latest) {
+    if (!els.statusKpis) return;
+    if (!latest) {
+      els.statusKpis.innerHTML = "";
+      return;
+    }
+    const s = latest.snapshot || {};
+    const mode = s.unit_mode
+      ? `${MODE_ES[s.unit_mode] || s.unit_mode} (${s.unit_mode_id ?? "—"})`
+      : "—";
+    const alarms = s.alarms || [];
+    const alarmTxt = alarms.length
+      ? alarms.map((a) => `#${a.number}${a.acknowledged ? " ack" : ""}`).join(", ")
+      : "ninguna";
+    const io = (latest.io && latest.io.points) || {};
+    const ioOn = Object.entries(io)
+      .filter(([, v]) => v && v.value === true)
+      .map(([k]) => k.replace(/^do_|^di_/, "").replace(/_/g, " "));
+    els.statusKpis.innerHTML =
+      kpiHtml("Contenedor", s.container_id || latest.container_id || "—") +
+      kpiHtml("Modo", mode) +
+      kpiHtml("Setpoint", fmtStatusVal(s.setpoint_c, " °C")) +
+      kpiHtml("Carga", fmtStatusVal(s.capacity_load_pct, " %")) +
+      kpiHtml("Supply", fmtStatusVal(s.supply_air_c, " °C")) +
+      kpiHtml("Return", fmtStatusVal(s.return_air_c, " °C")) +
+      kpiHtml("Ambiente", fmtStatusVal(s.ambient_c, " °C")) +
+      kpiHtml("Humedad", fmtStatusVal(s.humidity_pct, " %")) +
+      kpiHtml("AC", fmtStatusVal(s.ac_connected)) +
+      kpiHtml("Unidad activa", fmtStatusVal(s.unit_active)) +
+      kpiHtml("Alarma", s.alarm_present ? alarmTxt : "no") +
+      kpiHtml("IO ON", ioOn.length ? ioOn.join(", ") : "—") +
+      kpiHtml("CRC", latest.crc_all_ok ? "OK" : "ERROR");
+  }
+
+  function renderSeguimiento(data) {
+    const items = (data && data.items) || [];
+    const latest = data && data.latest;
+    if (els.statusBadge) els.statusBadge.textContent = String(data.count || items.length);
+    renderSeguimientoKpis(latest);
+    if (els.emptyStatus) els.emptyStatus.classList.toggle("show", items.length === 0);
+    if (!els.statusHours) return;
+    els.statusHours.innerHTML = "";
+    const byHour = new Map();
+    for (const it of items) {
+      const hk = it.hour || "desconocida";
+      if (!byHour.has(hk)) byHour.set(hk, []);
+      byHour.get(hk).push(it);
+    }
+    const hours = [...byHour.keys()].sort().reverse();
+    for (const hk of hours) {
+      const rows = byHour.get(hk);
+      const details = document.createElement("details");
+      details.className = "hour-block";
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.innerHTML = `<span class="hour-label">${esc(hk)}</span><span class="badge">${rows.length}</span>`;
+      details.appendChild(summary);
+      const table = document.createElement("table");
+      table.className = "capture-table";
+      table.innerHTML =
+        "<thead><tr><th>Hora</th><th>i</th><th>Contenedor</th><th>Modo</th><th>SP</th><th>Supply</th><th>Alarma</th><th>JSON</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const it of rows) {
+        const s = it.snapshot || {};
+        const mode = MODE_ES[s.unit_mode] || s.unit_mode || "—";
+        const alarm = (s.alarms || []).map((a) => `#${a.number}`).join(", ") || "—";
+        const tr = document.createElement("tr");
+        const json = JSON.stringify(it, null, 2);
+        tr.innerHTML =
+          `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+          `<td class="mono">${esc(it.i || "—")}</td>` +
+          `<td class="mono">${esc(it.container_id || s.container_id || "—")}</td>` +
+          `<td>${esc(mode)}</td>` +
+          `<td class="mono">${esc(fmtStatusVal(s.setpoint_c, "°C"))}</td>` +
+          `<td class="mono">${esc(fmtStatusVal(s.supply_air_c, "°C"))}</td>` +
+          `<td>${esc(alarm)}</td>` +
+          `<td class="payload-cell"><details><summary>ver</summary><pre>${esc(json)}</pre></details></td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      details.appendChild(table);
+      els.statusHours.appendChild(details);
+    }
+    if (els.statusMeta) {
+      const day = statusSelectedDate || data.date || "—";
+      els.statusMeta.textContent = latest
+        ? `${day} · ${items.length} registro(s) · último ${formatTs(latest.ts)} · ${latest.i || ""}`
+        : `${day} · sin registros`;
+    }
+  }
+
+  async function loadSeguimientoDays() {
+    const p = new URLSearchParams();
+    if (selected && selected.ip) p.set("ip", selected.ip);
+    try {
+      const r = await fetch(`${API}/api/seguimiento/days?${p}`);
+      const data = await r.json();
+      statusDays = data.days || [];
+      renderStatusDays();
+      if (!statusSelectedDate) {
+        statusSelectedDate = (statusDays[0] && statusDays[0].date) || todayKey();
+      }
+      if (els.statusDate) els.statusDate.value = statusSelectedDate;
+    } catch (e) {
+      if (els.statusMeta) els.statusMeta.textContent = String(e);
+    }
+  }
+
+  async function loadSeguimiento() {
+    try {
+      await loadSeguimientoDays();
+      if (!statusSelectedDate) statusSelectedDate = todayKey();
+      if (els.statusDate) els.statusDate.value = statusSelectedDate;
+      const p = new URLSearchParams();
+      p.set("date", statusSelectedDate);
+      p.set("limit", "500");
+      if (selected && selected.ip) p.set("ip", selected.ip);
+      const r = await fetch(`${API}/api/seguimiento?${p}`);
+      const data = await r.json();
+      renderSeguimiento(data);
+    } catch (e) {
+      if (els.statusMeta) els.statusMeta.textContent = String(e);
+    }
+  }
+
+  function selectStatusDay(dateKey) {
+    statusSelectedDate = dateKey;
+    if (els.statusDate) els.statusDate.value = dateKey;
+    if (els.statusDayList) {
+      [...els.statusDayList.children].forEach((li) => {
+        li.classList.toggle("active", li.dataset.date === dateKey);
+      });
+    }
+    loadSeguimiento();
+  }
+
+  if (els.btnRefreshStatus) els.btnRefreshStatus.addEventListener("click", loadSeguimiento);
+  if (els.statusDate) {
+    els.statusDate.addEventListener("change", () => {
+      if (els.statusDate.value) selectStatusDay(els.statusDate.value);
+    });
+  }
+  if (els.btnStatusPrev) {
+    els.btnStatusPrev.addEventListener("click", () => {
+      if (!statusSelectedDate) statusSelectedDate = todayKey();
+      selectStatusDay(shiftDateKey(statusSelectedDate, -1));
+    });
+  }
+  if (els.btnStatusNext) {
+    els.btnStatusNext.addEventListener("click", () => {
+      if (!statusSelectedDate) statusSelectedDate = todayKey();
+      selectStatusDay(shiftDateKey(statusSelectedDate, 1));
+    });
+  }
 
   setInterval(refreshHomoQueue, 2000);
   setInterval(() => {
