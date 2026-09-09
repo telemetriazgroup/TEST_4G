@@ -9,6 +9,8 @@ Persistencia:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
+
+import homologate as homo
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g")
@@ -37,6 +41,7 @@ app.add_middleware(
 client: AsyncIOMotorClient | None = None
 db = None
 _ws_clients: set[WebSocket] = set()
+log = logging.getLogger("test_4g")
 
 
 class SendBody(BaseModel):
@@ -199,6 +204,10 @@ async def startup() -> None:
     await db.sessions.create_index([("ip", 1), ("started_at", -1)])
     await db.sessions.create_index([("session_id", 1)], unique=True)
     await db.sessions.create_index([("is_active", 1), ("ip", 1)])
+    await db.homologate_log.create_index([("ts", -1)])
+    await db.homologate_log.create_index([("payload_hash", 1), ("ts", -1)])
+    await db.homologate_log.create_index([("status", 1), ("ts", -1)])
+    await db.messages.create_index([("homologate_status", 1), ("ts", -1)])
 
 
 @app.on_event("shutdown")
@@ -312,7 +321,8 @@ async def internal_telemetry(body: TelemetryBody):
         "encoding": body.encoding,
         "ts": now,
     }
-    await db.messages.insert_one(doc)
+    inserted = await db.messages.insert_one(doc)
+    doc["_id"] = inserted.inserted_id
 
     # Contadores de sesión
     inc = {"rx_count": 1} if body.direction == "rx" else {"tx_count": 1}
@@ -325,6 +335,8 @@ async def internal_telemetry(body: TelemetryBody):
     if inc:
         update_session["$inc"] = inc
     await db.sessions.update_one({"session_id": session_id}, update_session, upsert=False)
+
+    asyncio.create_task(_homologate_after_persist(doc))
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -349,6 +361,170 @@ async def internal_telemetry(body: TelemetryBody):
 
 
 # ---------------------------------------------------------------------------
+# Homologación POLLO → POST estándar (no bloquea el socket)
+# ---------------------------------------------------------------------------
+
+async def _mark_message(doc: dict[str, Any], fields: dict[str, Any]) -> None:
+    mid = doc.get("_id")
+    if not mid:
+        return
+    try:
+        await db.messages.update_one({"_id": mid}, {"$set": fields})
+    except Exception:
+        log.exception("no se pudo marcar homologate_status")
+
+
+async def _recent_duplicate(payload_hash: str, session_id: str | None) -> bool:
+    window = homo.env_dedup_s()
+    if window <= 0 or not payload_hash:
+        return False
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window)).isoformat()
+    q: dict[str, Any] = {
+        "payload_hash": payload_hash,
+        "status": "ok",
+        "ts": {"$gte": since},
+    }
+    if session_id:
+        q["session_id"] = session_id
+    found = await db.homologate_log.find_one(q, {"_id": 1})
+    return found is not None
+
+
+async def _post_standard(payload: dict[str, Any]) -> tuple[int | None, str | None]:
+    url = homo.env_url()
+    last_err = None
+    retries = homo.env_retries()
+    timeout = homo.env_timeout()
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                r = await http.post(url, json=payload)
+            if 200 <= r.status_code < 300:
+                return r.status_code, None
+            last_err = f"http_{r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+        if attempt < retries:
+            await asyncio.sleep(0.5 * attempt)
+    return None, last_err
+
+
+async def _homologate_after_persist(doc: dict[str, Any]) -> None:
+    """Corre en background: persistencia ya ocurrió."""
+    try:
+        classified = homo.classify_frame(doc)
+        status = classified["status"]
+        reason = classified["reason"]
+
+        if status == "skip":
+            await _mark_message(doc, {"homologate_status": "skip", "homologate_reason": reason})
+            return
+        if status == "incomplete":
+            await _mark_message(
+                doc,
+                {
+                    "homologate_status": "incomplete",
+                    "homologate_reason": reason,
+                    "homologate_opcodes": classified.get("opcodes") or [],
+                },
+            )
+            log.info(
+                "homologate incompleta ip=%s opcodes=%s reason=%s",
+                doc.get("ip"),
+                classified.get("opcodes"),
+                reason,
+            )
+            return
+
+        payload = classified.get("payload")
+        payload_hash = classified.get("payload_hash")
+        if not payload:
+            await _mark_message(doc, {"homologate_status": "skip", "homologate_reason": "no_payload"})
+            return
+
+        url = homo.env_url()
+        if not homo.env_enabled() or not url:
+            await _mark_message(
+                doc,
+                {
+                    "homologate_status": "disabled",
+                    "homologate_reason": "no_url" if not url else "disabled",
+                    "homologate_opcodes": classified.get("opcodes") or [],
+                    "homologate_i": payload.get("i"),
+                },
+            )
+            return
+
+        if await _recent_duplicate(payload_hash, doc.get("session_id")):
+            await _mark_message(
+                doc,
+                {
+                    "homologate_status": "skip",
+                    "homologate_reason": "duplicate",
+                    "homologate_hash": payload_hash,
+                },
+            )
+            return
+
+        await _mark_message(doc, {"homologate_status": "pending", "homologate_hash": payload_hash})
+        http_status, err = await _post_standard(payload)
+        now = _now()
+        log_doc = {
+            "ts": now,
+            "i": payload.get("i"),
+            "opcodes": classified.get("opcodes") or [],
+            "host": homo.destination_host(url),
+            "http_status": http_status,
+            "error": err,
+            "status": "ok" if http_status else "error",
+            "payload_hash": payload_hash,
+            "session_id": doc.get("session_id"),
+            "addr": doc.get("addr"),
+            "ip": doc.get("ip"),
+            "message_ts": doc.get("ts"),
+        }
+        await db.homologate_log.insert_one(log_doc)
+        if http_status:
+            await _mark_message(
+                doc,
+                {
+                    "homologate_status": "ok",
+                    "homologate_reason": "sent",
+                    "homologate_http": http_status,
+                    "homologate_i": payload.get("i"),
+                    "homologate_hash": payload_hash,
+                },
+            )
+            log.info(
+                "homologate ok i=%s host=%s http=%s ip=%s",
+                payload.get("i"),
+                log_doc["host"],
+                http_status,
+                doc.get("ip"),
+            )
+        else:
+            await _mark_message(
+                doc,
+                {
+                    "homologate_status": "error",
+                    "homologate_reason": err or "post_failed",
+                    "homologate_i": payload.get("i"),
+                    "homologate_hash": payload_hash,
+                },
+            )
+            log.warning(
+                "homologate error i=%s host=%s err=%s ip=%s",
+                payload.get("i"),
+                log_doc["host"],
+                err,
+                doc.get("ip"),
+            )
+    except Exception:
+        log.exception("homologate task falló")
+        await _mark_message(doc, {"homologate_status": "error", "homologate_reason": "internal"})
+
+
+# ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
 
@@ -356,7 +532,33 @@ async def internal_telemetry(body: TelemetryBody):
 async def health():
     msgs = await db.messages.estimated_document_count()
     sessions = await db.sessions.count_documents({"is_active": True})
-    return {"ok": True, "messages": msgs, "active_sessions": sessions}
+    return {
+        "ok": True,
+        "messages": msgs,
+        "active_sessions": sessions,
+        "homologate": {
+            "enabled": homo.env_enabled() and bool(homo.env_url()),
+            "host": homo.destination_host(),
+        },
+    }
+
+
+@app.get("/api/homologate/status")
+async def homologate_status(limit: int = 20):
+    limit = max(1, min(limit, 100))
+    cursor = db.homologate_log.find({}, {"_id": 0}).sort("ts", -1).limit(limit)
+    logs = await cursor.to_list(limit)
+    pending = await db.messages.count_documents({"homologate_status": "pending"})
+    errors = await db.messages.count_documents({"homologate_status": "error"})
+    return {
+        "enabled": homo.env_enabled(),
+        "configured": bool(homo.env_url()),
+        "host": homo.destination_host(),
+        "unit": homo.env_unit(),
+        "pending": pending,
+        "errors": errors,
+        "recent": logs,
+    }
 
 
 @app.get("/api/devices")

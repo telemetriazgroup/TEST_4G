@@ -25,6 +25,12 @@ services:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: test_4g
       BRIDGE_URL: http://tcp_bridge:8081
+      HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
+      HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
+      HOMOLOGATE_TIMEOUT_S: ${HOMOLOGATE_TIMEOUT_S:-5}
+      HOMOLOGATE_ENABLED: ${HOMOLOGATE_ENABLED:-1}
+      HOMOLOGATE_RETRIES: ${HOMOLOGATE_RETRIES:-3}
+      HOMOLOGATE_DEDUP_S: ${HOMOLOGATE_DEDUP_S:-30}
     depends_on:
       - mongo
     restart: unless-stopped
