@@ -2,6 +2,252 @@
   const meta = document.querySelector('meta[name="api-base"]');
   const API = (meta && meta.content) || location.origin;
   const LIVE_MAX = 100;
+  const SESSION_KEY = "ztrack_session";
+  const ZTRACK_URL = `${location.protocol}//${location.hostname}:8444`;
+
+  function readSession() {
+    try {
+      return JSON.parse(localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY) || "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSession(session, remember) {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    const raw = JSON.stringify(session);
+    (remember ? localStorage : sessionStorage).setItem(SESSION_KEY, raw);
+  }
+
+  function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+  }
+
+  function applyShell(session) {
+    const login = document.getElementById("appLogin");
+    const serial = document.getElementById("shellSerial");
+    const client = document.getElementById("shellClient");
+    document.body.classList.remove("is-login", "is-client");
+    if (!session) {
+      if (login) login.hidden = false;
+      if (serial) serial.hidden = true;
+      if (client) client.hidden = true;
+      document.body.classList.add("is-login");
+      return "login";
+    }
+    if (login) login.hidden = true;
+    if (session.role === "superadmin") {
+      if (serial) serial.hidden = false;
+      if (client) client.hidden = true;
+      return "serial";
+    }
+    window.location.replace(ZTRACK_URL);
+    return "redirect";
+  }
+
+  function kpi(label, value) {
+    return `<div class="status-kpi"><span class="k">${label}</span><span class="v">${value}</span></div>`;
+  }
+
+  function fmt(n, suffix) {
+    if (n == null || n === "") return "—";
+    const num = Number(n);
+    const t = Number.isInteger(num) ? String(num) : num.toFixed(1);
+    return suffix ? `${t}${suffix}` : t;
+  }
+
+  async function startClientApp(session) {
+    const roleEl = document.getElementById("clientRole");
+    const identEl = document.getElementById("clientIdent");
+    const freshEl = document.getElementById("clientFresh");
+    const dot = document.getElementById("clientDot");
+    const banner = document.getElementById("clientBanner");
+    const tabCfg = document.getElementById("tabCfg");
+    const air = document.getElementById("clientAir");
+    const zones = document.getElementById("clientZones");
+    const atmo = document.getElementById("clientAtmo");
+    const relays = document.getElementById("clientRelays");
+    const isAdmin = session.role === "admin";
+    if (roleEl) roleEl.textContent = isAdmin ? "admin" : "monitoreo";
+    if (identEl) identEl.textContent = session.ident || "POLLO_BEBE";
+    if (tabCfg) tabCfg.hidden = !isAdmin;
+    document.getElementById("cpanelCfg").hidden = true;
+    document.getElementById("cpanelLive").hidden = false;
+
+    document.querySelectorAll("#clientTabs .tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.dataset.ctab === "cfg" && !isAdmin) return;
+        document.querySelectorAll("#clientTabs .tab").forEach((b) => b.classList.toggle("active", b === btn));
+        document.getElementById("cpanelLive").hidden = btn.dataset.ctab !== "live";
+        document.getElementById("cpanelCfg").hidden = btn.dataset.ctab !== "cfg";
+      });
+    });
+
+    const cfg = {
+      temp: document.getElementById("cfgTemp"),
+      hum: document.getElementById("cfgHum"),
+      co2: document.getElementById("cfgCo2"),
+      hint: document.getElementById("cfgHint"),
+    };
+    let applied = { temp: null, hum: null, co2: null };
+    let seeded = false;
+
+    function paint(live) {
+      if (identEl) identEl.textContent = live.ident || session.ident;
+      if (dot) {
+        dot.classList.toggle("on", !!live.online && !live.stale);
+        dot.classList.toggle("off", !live.online || !!live.stale);
+      }
+      if (freshEl) {
+        const age = live.age_s;
+        freshEl.textContent = live.stale
+          ? `Sin datos ${age != null ? Math.floor(age / 60) + " min" : ""}`
+          : age != null
+            ? `Hace ${age < 60 ? age + " s" : Math.floor(age / 60) + " min"}`
+            : "—";
+      }
+      if (banner) {
+        banner.classList.toggle("on", !!live.online && !live.stale);
+        banner.classList.toggle("off", !!live.stale || !live.online);
+        banner.textContent = live.stale
+          ? "Última lectura antigua. Las tarjetas muestran el último valor conocido."
+          : live.online
+            ? "Datos de INFO / USDA / CO₂ % / 4 motores. Ventilación = motores."
+            : "Sin sesión TCP. Se muestra el último seguimiento.";
+      }
+      if (air) {
+        air.innerHTML =
+          kpi("Suministro", fmt(live.supply_air_c, " °C")) +
+          kpi("Retorno", fmt(live.return_air_c, " °C")) +
+          kpi("Consigna", fmt(live.setpoint_c, " °C"));
+      }
+      if (zones) {
+        zones.innerHTML = (live.zones || [])
+          .map((z) => kpi(`Zona ${z.id}`, fmt(z.temp, " °C")))
+          .join("");
+      }
+      if (atmo) {
+        const motors = (live.motors || [])
+          .map((m) => kpi(m.label || `Motor ${m.id}`, m.speed_pct == null ? "—" : `${fmt(m.volts, " V")} · ${fmt(m.speed_pct, " %")}`))
+          .join("");
+        atmo.innerHTML =
+          kpi("CO₂", fmt(live.co2_pct, " %")) +
+          kpi("Humedad", fmt(live.humidity_pct, " %")) +
+          kpi("Ventilación", fmt(live.ventilation_pct, " %")) +
+          motors;
+      }
+      if (relays) {
+        relays.innerHTML = (live.relays || [])
+          .map((r) => kpi(r.name || `R${r.id}`, r.on ? "ON" : "OFF"))
+          .join("") || "<p class='hint'>Sin relés</p>";
+      }
+      if (!seeded && cfg.temp) {
+        cfg.temp.value = live.setpoint_c ?? "";
+        cfg.hum.value = live.humidity_setpoint_pct ?? "";
+        cfg.co2.value = live.co2_setpoint_pct ?? "";
+        applied = {
+          temp: live.setpoint_c,
+          hum: live.humidity_setpoint_pct,
+          co2: live.co2_setpoint_pct,
+        };
+        seeded = true;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const live = await fetch(`${API}/api/client/live?ident=${encodeURIComponent(session.ident || "POLLO_BEBE")}`).then((r) => r.json());
+        paint(live);
+      } catch (e) {
+        if (banner) banner.textContent = String(e);
+      }
+    }
+
+    document.getElementById("cfgDiscard")?.addEventListener("click", () => {
+      if (cfg.temp) cfg.temp.value = applied.temp ?? "";
+      if (cfg.hum) cfg.hum.value = applied.hum ?? "";
+      if (cfg.co2) cfg.co2.value = applied.co2 ?? "";
+      if (cfg.hint) cfg.hint.textContent = "";
+    });
+    document.getElementById("cfgApply")?.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      if (cfg.hint) cfg.hint.textContent = "Encolando…";
+      try {
+        const r = await fetch(`${API}/api/client/setpoints`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ident: session.ident || "POLLO_BEBE",
+            temperature_c: cfg.temp.value === "" ? undefined : Number(cfg.temp.value),
+            humidity_pct: cfg.hum.value === "" ? undefined : Number(cfg.hum.value),
+            co2_pct: cfg.co2.value === "" ? undefined : Number(cfg.co2.value),
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "Error");
+        applied = { temp: Number(cfg.temp.value), hum: Number(cfg.hum.value), co2: Number(cfg.co2.value) };
+        cfg.hint.textContent = data.online
+          ? "En cola. Sale en la próxima ventana libre."
+          : "Guardado como referencia: no hay sesión. Se cancela a las 2 h.";
+      } catch (e) {
+        if (cfg.hint) cfg.hint.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btnLogoutClient")?.addEventListener("click", () => {
+      clearSession();
+      location.reload();
+    });
+
+    await refresh();
+    setInterval(refresh, 8000);
+  }
+
+  function bindLogin() {
+    const form = document.getElementById("loginForm");
+    if (!form) return;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("loginError");
+      const btn = document.getElementById("loginBtn");
+      const user = document.getElementById("loginUser").value;
+      const pass = document.getElementById("loginPass").value;
+      const remember = document.getElementById("loginRemember").checked;
+      if (err) err.hidden = true;
+      if (btn) btn.disabled = true;
+      try {
+        const r = await fetch(`${API}/api/client/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: user, password: pass }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error("bad");
+        writeSession(data, remember);
+        location.reload();
+      } catch {
+        if (err) err.hidden = false;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
+  bindLogin();
+  document.getElementById("btnLogoutSerial")?.addEventListener("click", () => {
+    clearSession();
+    location.reload();
+  });
+
+  const session = readSession();
+  const mode = applyShell(session);
+  if (mode === "login" || mode === "redirect") return;
+  if (mode === "client") {
+    startClientApp(session);
+    return;
+  }
 
   const els = {
     wsDot: document.getElementById("wsDot"),

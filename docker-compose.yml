@@ -64,5 +64,18 @@ services:
       - backend
     restart: unless-stopped
 
+  ztrack:
+    build:
+      context: ../pollitos_proyecto
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+        VITE_SERIAL_URL: http://localhost:8089
+    ports:
+      - "8444:8444"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   mongo_data:

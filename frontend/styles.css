@@ -34,6 +34,103 @@ body {
   flex-direction: column;
 }
 
+body.is-login { overflow: auto; }
+body.is-client .layout { display: none; }
+
+#appLogin[hidden],
+#shellSerial[hidden],
+#shellClient[hidden] { display: none !important; }
+
+#shellSerial {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 2;
+}
+.login-card {
+  width: min(400px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.5rem 1.4rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.login-brand {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.login-sub {
+  margin: -0.4rem 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.login-card input[type="text"],
+.login-card input[type="password"] {
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--ink);
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.login-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.45rem !important;
+}
+.login-btn { height: 44px; font-size: 0.95rem; }
+.login-error { margin: 0; color: #b42318; font-size: 0.82rem; }
+.login-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+#shellClient {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#shellClient[hidden] { display: none !important; }
+.client-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 1.25rem 1.25rem;
+}
+.client-h {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.client-panel { padding-bottom: 1rem; }
+
 .bg {
   position: fixed;
   inset: 0;

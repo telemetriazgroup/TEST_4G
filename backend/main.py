@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
+import client_api as capi
 import comandos as cmdb
 import decode_rs
 import decode_tk
@@ -118,6 +119,26 @@ class ComandoBody(BaseModel):
     modo: str = "DEC"
     label: str | None = None
     window: str = "any"
+
+
+class ClientLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class ClientSetpointsBody(BaseModel):
+    ident: str = "POLLO_BEBE"
+    temperature_c: float | None = None
+    humidity_pct: float | None = None
+    co2_pct: float | None = None
+
+
+CLIENT_USERS = {
+    "superadmin": {"password": "superadmin", "role": "superadmin", "name": "Superadmin"},
+    "admin": {"password": "admin", "role": "admin", "name": "Administrador"},
+    "monitor": {"password": "monitor", "role": "monitor", "name": "Monitoreo"},
+    "demo": {"password": "demo", "role": "admin", "name": "Demo"},
+}
 
 
 class HomologateEnqueueBody(BaseModel):
@@ -1691,6 +1712,98 @@ async def comandos_queue_clear():
     )
     await broadcast({"type": "comando", "action": "cleared", "count": result.modified_count})
     return {"ok": True, "canceled": result.modified_count}
+
+
+async def _unit_context(ident: str) -> tuple[dict[str, Any], bool, dict[str, Any] | None]:
+    latest = await _latest_by_kind(ident, None)
+    ip = None
+    addr = None
+    for kind in ("info", "relay", "mp5000"):
+        row = latest.get(kind) or {}
+        ip = ip or row.get("ip")
+        addr = addr or row.get("addr")
+    online, sess = await _is_online(addr, ip, None)
+    if not online:
+        dev = await db.devices.find_one({"is_connected": True})
+        if dev:
+            return latest, True, {
+                "session_id": dev.get("session_id"),
+                "ip": dev.get("ip"),
+                "addr": dev.get("addr"),
+            }
+    if sess and addr:
+        sess = {**sess, "addr": sess.get("addr") or addr, "ip": sess.get("ip") or ip}
+    return latest, online, sess
+
+
+@app.post("/api/client/login")
+async def client_login(body: ClientLoginBody):
+    key = (body.username or "").strip().lower()
+    user = CLIENT_USERS.get(key)
+    if not user or user["password"] != (body.password or ""):
+        raise HTTPException(401, "Usuario o contraseña incorrectos")
+    return {
+        "ok": True,
+        "role": user["role"],
+        "name": user["name"],
+        "username": key,
+        "ident": capi.IDENT_DEFAULT,
+    }
+
+
+@app.get("/api/client/live")
+async def client_live(ident: str = capi.IDENT_DEFAULT):
+    latest, online, sess = await _unit_context(ident)
+    names = await _relay_names_for(ident)
+    snap = capi.build_live(latest, ident=ident, online=online, names=names)
+    snap["session_id"] = (sess or {}).get("session_id")
+    snap["ip"] = (sess or {}).get("ip")
+    snap["addr"] = (sess or {}).get("addr")
+    return snap
+
+
+@app.get("/api/client/series")
+async def client_series(ident: str = capi.IDENT_DEFAULT, hours: int = 6):
+    hours = max(1, min(hours, 168))
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    q = {"i": ident, "kind": "info", "ts": {"$gte": since}}
+    rows = await db.seguimiento.find(q, {"_id": 0}).sort("ts", 1).to_list(4000)
+    return capi.build_series(rows, hours)
+
+
+@app.post("/api/client/setpoints")
+async def client_setpoints(body: ClientSetpointsBody):
+    ident = (body.ident or capi.IDENT_DEFAULT).strip() or capi.IDENT_DEFAULT
+    latest, online, sess = await _unit_context(ident)
+    addr = (sess or {}).get("addr")
+    ip = (sess or {}).get("ip")
+    session_id = (sess or {}).get("session_id")
+    writes: list[tuple[str, int, float]] = []
+    if body.temperature_c is not None:
+        writes.append(("temperature_c", 0, float(body.temperature_c)))
+    if body.humidity_pct is not None:
+        writes.append(("humidity_pct", 4, float(body.humidity_pct)))
+    if body.co2_pct is not None:
+        writes.append(("co2_pct", 3, float(body.co2_pct)))
+    if not writes:
+        raise HTTPException(400, "indique temperature_c, humidity_pct o co2_pct")
+    queued = []
+    for key, idx, value in writes:
+        built = cmdb.build_mp5000(idx, value, None, ident)
+        item = await comandos_enqueue(
+            ComandoBody(
+                ident=ident,
+                addr=addr,
+                ip=ip,
+                session_id=session_id,
+                kind="mp5000_write",
+                idx=idx,
+                value=value,
+                fp=built.get("fp"),
+            )
+        )
+        queued.append({"key": key, "idx": idx, "value": value, **item})
+    return {"ok": True, "online": online, "count": len(queued), "items": queued}
 
 
 @app.get("/api/unit-status")
