@@ -81,6 +81,58 @@
     relayNamesForm: document.getElementById("relayNamesForm"),
     btnSaveRelayNames: document.getElementById("btnSaveRelayNames"),
     relayNamesHint: document.getElementById("relayNamesHint"),
+    panelCmd: document.getElementById("panelCmd"),
+    cmdTitle: document.getElementById("cmdTitle"),
+    cmdOnline: document.getElementById("cmdOnline"),
+    cmdWindow: document.getElementById("cmdWindow"),
+    cmdBanner: document.getElementById("cmdBanner"),
+    cmdScreen: document.getElementById("cmdScreen"),
+    cmdFields: document.getElementById("cmdFields"),
+    cmdActions: document.getElementById("cmdActions"),
+    cmdRelays: document.getElementById("cmdRelays"),
+    cmdRelayBits: document.getElementById("cmdRelayBits"),
+    btnEnqueueRelay: document.getElementById("btnEnqueueRelay"),
+    cmdPotV: document.getElementById("cmdPotV"),
+    cmdPotHint: document.getElementById("cmdPotHint"),
+    btnEnqueuePot: document.getElementById("btnEnqueuePot"),
+    cmdQueue: document.getElementById("cmdQueue"),
+    cmdSentBody: document.getElementById("cmdSentBody"),
+    cmdMeta: document.getElementById("cmdMeta"),
+    btnRefreshCmd: document.getElementById("btnRefreshCmd"),
+    btnClearCmd: document.getElementById("btnClearCmd"),
+    panelReglas: document.getElementById("panelReglas"),
+    reglasTitle: document.getElementById("reglasTitle"),
+    reglasOnline: document.getElementById("reglasOnline"),
+    reglasBanner: document.getElementById("reglasBanner"),
+    reglasLive: document.getElementById("reglasLive"),
+    reglasMeta: document.getElementById("reglasMeta"),
+    btnRefreshReglas: document.getElementById("btnRefreshReglas"),
+    rgEntrada: document.getElementById("rgEntrada"),
+    rgOperador: document.getElementById("rgOperador"),
+    rgValor: document.getElementById("rgValor"),
+    rgUnidad: document.getElementById("rgUnidad"),
+    rgSalida: document.getElementById("rgSalida"),
+    rgEstadoCombo: document.getElementById("rgEstadoCombo"),
+    rgEstadoNum: document.getElementById("rgEstadoNum"),
+    rgRango: document.getElementById("rgRango"),
+    rgTiempo: document.getElementById("rgTiempo"),
+    rgPerm: document.getElementById("rgPerm"),
+    rgPreview: document.getElementById("rgPreview"),
+    rgBody: document.getElementById("rgBody"),
+    rgIdent: document.getElementById("rgIdent"),
+    rgPrefijo: document.getElementById("rgPrefijo"),
+    rgOut: document.getElementById("rgOut"),
+    rgQueue: document.getElementById("rgQueue"),
+    rgAddIf: document.getElementById("rgAddIf"),
+    rgAddElse: document.getElementById("rgAddElse"),
+    rgAddEndif: document.getElementById("rgAddEndif"),
+    rgUp: document.getElementById("rgUp"),
+    rgDown: document.getElementById("rgDown"),
+    rgDel: document.getElementById("rgDel"),
+    rgClear: document.getElementById("rgClear"),
+    rgEnqueue: document.getElementById("rgEnqueue"),
+    rgCopyJson: document.getElementById("rgCopyJson"),
+    rgCopyHex: document.getElementById("rgCopyHex"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -281,10 +333,14 @@
       els.panelArchive.classList.toggle("active", activeTab === "archive");
       if (els.panelSent) els.panelSent.classList.toggle("active", activeTab === "sent");
       if (els.panelStatus) els.panelStatus.classList.toggle("active", activeTab === "status");
+      if (els.panelCmd) els.panelCmd.classList.toggle("active", activeTab === "cmd");
+      if (els.panelReglas) els.panelReglas.classList.toggle("active", activeTab === "reglas");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
       if (activeTab === "status") loadSeguimiento();
+      if (activeTab === "cmd") loadComandos();
+      if (activeTab === "reglas") loadReglas();
     });
   });
 
@@ -1057,6 +1113,16 @@
         ? `Seguimiento · ${selected.ip}:${selected.port}`
         : "Seguimiento";
     }
+    if (els.cmdTitle) {
+      els.cmdTitle.textContent = selected
+        ? `Comandos · ${selected.ip}:${selected.port}`
+        : "Comandos";
+    }
+    if (els.reglasTitle) {
+      els.reglasTitle.textContent = selected
+        ? `Reglas · ${selected.ip}:${selected.port}`
+        : "Reglas";
+    }
 
     [...els.deviceList.children].forEach((li, i) => {
       if (i === 0) li.classList.toggle("active", !selected);
@@ -1068,6 +1134,8 @@
     if (activeTab === "archive") await loadArchiveTab();
     if (activeTab === "sent") await loadSent();
     if (activeTab === "status") await loadSeguimiento();
+    if (activeTab === "cmd") await loadComandos();
+    if (activeTab === "reglas") await loadReglas();
   }
 
   // ---- WS ----
@@ -1087,6 +1155,10 @@
         if (msg.type === "message") pushLive(msg);
         if (msg.type === "seguimiento" && activeTab === "status") {
           if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
+        }
+        if (msg.type === "comando" && (activeTab === "cmd" || activeTab === "reglas")) {
+          if (activeTab === "cmd") loadComandos();
+          if (activeTab === "reglas") loadReglas();
         }
         if (
           msg.type === "connect" ||
@@ -1561,6 +1633,677 @@
       selectStatusDay(shiftDateKey(statusSelectedDate, 1));
     });
   }
+
+  function cmdScope() {
+    const p = new URLSearchParams();
+    p.set("ident", "POLLO_BEBE");
+    if (selected && selected.ip) p.set("ip", selected.ip);
+    return p;
+  }
+
+  function cmdBodyBase() {
+    return {
+      ident: "POLLO_BEBE",
+      addr: selected ? selected.addr : null,
+      ip: selected ? selected.ip : null,
+      session_id: selected ? selected.session_id : null,
+    };
+  }
+
+  function updateRelayBitsPreview() {
+    if (!els.cmdRelays || !els.cmdRelayBits) return;
+    const bits = [...els.cmdRelays.querySelectorAll("input[type=checkbox]")]
+      .sort((a, b) => Number(a.dataset.id) - Number(b.dataset.id))
+      .map((c) => (c.checked ? "0" : "1"))
+      .join("");
+    els.cmdRelayBits.textContent = bits || "----------";
+    return bits;
+  }
+
+  function updatePotHint() {
+    if (!els.cmdPotV || !els.cmdPotHint) return;
+    const v = Number(els.cmdPotV.value);
+    const n = Math.round(v * 100);
+    els.cmdPotHint.textContent = `n=${n} · ${(n / 10).toFixed(1)}% · ${v.toFixed(2)} V`;
+    return n;
+  }
+
+  function renderCmdCatalog(data) {
+    const online = !!(data && data.online);
+    if (els.cmdOnline) els.cmdOnline.textContent = online ? "en línea" : "sin sesión";
+    if (els.cmdBanner) {
+      els.cmdBanner.classList.toggle("on", online);
+      els.cmdBanner.classList.toggle("off", !online);
+      els.cmdBanner.textContent = online
+        ? "Equipo en línea: Encolar manda el comando a la cola y sale en la próxima ventana libre (V1/V2)."
+        : "Sin sesión activa: el comando se guarda solo como referencia. No se envía. Se cancela solo a las 2 horas.";
+    }
+    const screen = (data && data.screen) || {};
+    if (els.cmdScreen) {
+      els.cmdScreen.innerHTML =
+        kpiHtml("Supply", fmtStatusVal(screen.supply_air_c, " °C")) +
+        kpiHtml("Return", fmtStatusVal(screen.return_air_c, " °C")) +
+        kpiHtml("SP temp", fmtStatusVal(screen.setpoint_c, " °C")) +
+        kpiHtml("Humedad", fmtStatusVal(screen.humidity_pct, " %")) +
+        kpiHtml("SP humedad", fmtStatusVal(screen.humidity_setpoint, " %")) +
+        kpiHtml("Contenedor", screen.container_id || "—") +
+        kpiHtml("Modo", MODE_ES[screen.unit_mode] || screen.unit_mode || "—");
+    }
+    if (els.cmdFields) {
+      els.cmdFields.innerHTML = "";
+      for (const f of (data && data.fields) || []) {
+        const card = document.createElement("div");
+        card.className = "cmd-card";
+        card.innerHTML =
+          `<strong>${esc(f.label)}</strong> <span class="cur">ahora ${esc(fmtStatusVal(f.current, f.unit ? " " + f.unit : ""))}</span>` +
+          `<p class="help">${esc(f.help || "")} · idx ${f.idx} · fp ${f.fp}</p>` +
+          `<div class="cmd-row"><input type="number" step="any" data-idx="${f.idx}" data-fp="${f.fp}" placeholder="nuevo valor" />` +
+          `<button type="button" class="btn primary btn-enc-mp">Encolar</button></div>` +
+          `<code class="cmd-preview" data-preview-idx="${f.idx}">MP5000_Trama_Write(${f.idx},valor,${f.fp})</code>`;
+        const inp = card.querySelector("input");
+        const prev = card.querySelector(".cmd-preview");
+        inp.addEventListener("input", () => {
+          prev.textContent = `MP5000_Trama_Write(${f.idx},${inp.value || "valor"},${f.fp})`;
+        });
+        card.querySelector(".btn-enc-mp").addEventListener("click", () => {
+          enqueueComando({
+            ...cmdBodyBase(),
+            kind: "mp5000_write",
+            idx: f.idx,
+            value: inp.value,
+            fp: f.fp,
+          });
+        });
+        els.cmdFields.appendChild(card);
+      }
+    }
+    if (els.cmdActions) {
+      els.cmdActions.innerHTML = "";
+      for (const a of (data && data.actions) || []) {
+        const card = document.createElement("div");
+        card.className = "cmd-card";
+        const needVal = a.idx === 30;
+        card.innerHTML =
+          `<strong>${esc(a.label)}</strong><p class="help">${esc(a.help || "")}</p>` +
+          (needVal ? `<div class="cmd-row"><input type="number" id="cmdPauseS" value="300" /> s</div>` : "") +
+          `<button type="button" class="btn primary">Encolar acción</button>`;
+        card.querySelector("button").addEventListener("click", () => {
+          if (!confirm(`¿Encolar «${a.label}»? Acción de riesgo.`)) return;
+          const value = needVal ? (card.querySelector("input") || {}).value : 1;
+          enqueueComando({
+            ...cmdBodyBase(),
+            kind: "mp5000_write",
+            idx: a.idx,
+            value,
+            fp: a.fp || 1,
+          });
+        });
+        els.cmdActions.appendChild(card);
+      }
+    }
+    if (els.cmdRelays) {
+      els.cmdRelays.innerHTML = "";
+      for (const r of (data && data.relays) || []) {
+        const row = document.createElement("label");
+        row.className = "relay-toggle";
+        row.innerHTML =
+          `<span>R${r.id}</span><span>${esc(r.name)}</span>` +
+          `<span><input type="checkbox" data-id="${r.id}" ${r.on ? "checked" : ""} /> ON</span>`;
+        els.cmdRelays.appendChild(row);
+      }
+      els.cmdRelays.querySelectorAll("input").forEach((c) => {
+        c.addEventListener("change", updateRelayBitsPreview);
+      });
+      updateRelayBitsPreview();
+    }
+  }
+
+  function renderCmdQueue(data) {
+    if (!els.cmdQueue) return;
+    const items = (data && data.items) || [];
+    if (!items.length) {
+      els.cmdQueue.innerHTML = "<p class='hint'>Cola vacía (pendientes y referencias).</p>";
+      return;
+    }
+    els.cmdQueue.innerHTML = items
+      .map((it) => {
+        return (
+          `<div class="q-item"><span class="kind-badge kind-${esc(it.status)}">${esc(it.status)}</span> ` +
+          `${esc(it.label || it.rs || "")}<br><code>${esc(it.rs || "")}</code> ` +
+          `<button type="button" class="btn ghost" data-cancel="${esc(it.queue_id)}">Cancelar</button></div>`
+        );
+      })
+      .join("");
+    els.cmdQueue.querySelectorAll("[data-cancel]").forEach((btn) => {
+      btn.addEventListener("click", () => cancelComando(btn.dataset.cancel));
+    });
+  }
+
+  function renderCmdSent(data) {
+    if (!els.cmdSentBody) return;
+    els.cmdSentBody.innerHTML = "";
+    for (const it of (data && data.items) || []) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(it.sent_at || it.enqueued_at))}</td>` +
+        `<td><span class="kind-badge">${esc(it.status || "")}</span></td>` +
+        `<td>${esc(it.label || "—")}</td>` +
+        `<td class="mono">${esc(it.rs || "")}</td>` +
+        `<td>${esc(it.window_used || it.window || "—")}</td>`;
+      els.cmdSentBody.appendChild(tr);
+    }
+  }
+
+  async function enqueueComando(body) {
+    try {
+      const r = await fetch(`${API}/api/comandos/enqueue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        alert(data.detail || "No se pudo encolar");
+        return;
+      }
+      const st = (data.item && data.item.status) || "";
+      const note = data.online
+        ? `En cola (${st}). Sale en la próxima ventana libre (FIFO).`
+        : `Referencia guardada (${st}). No se envía: no hay sesión. Se cancela a las 2 h.`;
+      if (els.cmdMeta) els.cmdMeta.textContent = note;
+      if (els.reglasMeta) els.reglasMeta.textContent = note;
+      if (activeTab === "cmd") loadComandos();
+      if (activeTab === "reglas") loadReglas();
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  async function cancelComando(queueId) {
+    try {
+      await fetch(`${API}/api/comandos/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ queue_id: queueId }),
+      });
+      if (activeTab === "cmd") loadComandos();
+      if (activeTab === "reglas") loadReglas();
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  async function loadComandos() {
+    const p = cmdScope();
+    try {
+      const [cat, queue, sent] = await Promise.all([
+        fetch(`${API}/api/comandos/catalog?${p}`).then((r) => r.json()),
+        fetch(`${API}/api/comandos/queue?${selected && selected.ip ? "ip=" + encodeURIComponent(selected.ip) : ""}`).then((r) => r.json()),
+        fetch(`${API}/api/comandos/sent?${p}&limit=100`).then((r) => r.json()),
+      ]);
+      renderCmdCatalog(cat);
+      renderCmdQueue(queue);
+      renderCmdSent(sent);
+      const openWin = Object.values(queue.windows || {}).find((w) => w && w.open);
+      if (els.cmdWindow) els.cmdWindow.textContent = openWin ? `ventana ${openWin.name}` : "ventana —";
+      if (els.cmdMeta) {
+        els.cmdMeta.textContent =
+          `${queue.queued || 0} en cola · ${queue.reference || 0} referencia(s) · ${sent.sent || 0} enviados · TTL 2 h`;
+      }
+    } catch (e) {
+      if (els.cmdMeta) els.cmdMeta.textContent = String(e);
+    }
+  }
+
+  if (els.btnRefreshCmd) els.btnRefreshCmd.addEventListener("click", loadComandos);
+  if (els.btnClearCmd) {
+    els.btnClearCmd.addEventListener("click", async () => {
+      if (!confirm("¿Cancelar todos los pendientes y referencias?")) return;
+      await fetch(`${API}/api/comandos/queue/clear`, { method: "POST" });
+      loadComandos();
+    });
+  }
+  if (els.btnEnqueueRelay) {
+    els.btnEnqueueRelay.addEventListener("click", () => {
+      const bits = updateRelayBitsPreview();
+      enqueueComando({ ...cmdBodyBase(), kind: "relay_set", bits });
+    });
+  }
+  if (els.btnEnqueuePot) {
+    els.btnEnqueuePot.addEventListener("click", () => {
+      const n = updatePotHint();
+      enqueueComando({ ...cmdBodyBase(), kind: "relay_pot", pot: n });
+    });
+  }
+  if (els.cmdPotV) els.cmdPotV.addEventListener("input", updatePotHint);
+
+  const RG_RELAY_EST = [
+    { txt: "ACTIVAR  (0)", val: 0 },
+    { txt: "DESACTIVAR  (1)", val: 1 },
+  ];
+  const RG_GATE_EST = [
+    { txt: "OPEN  (1)", val: 1 },
+    { txt: "CLOSE  (0)", val: 0 },
+  ];
+  let rgTables = { entradas: [], salidas: [], operadores: [] };
+  let rgLive = { info: {}, relays: [], motores: [] };
+  let rgProgram = [];
+  let rgSel = -1;
+  let rgFilled = false;
+
+  function rgModo() {
+    const el = document.querySelector('input[name="rgModo"]:checked');
+    return el ? el.value : "DEC";
+  }
+
+  function rgB1(v) {
+    return (v & 0xff).toString(16).toUpperCase().padStart(2, "0");
+  }
+
+  function rgB2(valor, modo) {
+    const n = Number(valor);
+    if (modo === "DEC") {
+      if (!Number.isInteger(n) || n < 0 || n > 9999) {
+        throw new Error(`${valor} no cabe en BCD 0-9999; use HEX`);
+      }
+      return String(n).padStart(4, "0");
+    }
+    return (n & 0xffff).toString(16).toUpperCase().padStart(4, "0");
+  }
+
+  function rgGroup(hexstr) {
+    const hx = String(hexstr || "").replace(/\s/g, "").toUpperCase();
+    return hx.replace(/../g, (b) => `${b} `).trim();
+  }
+
+  function rgFind(list, name) {
+    return (list || []).find((x) => x.name === name) || null;
+  }
+
+  function rgCodeByte(code) {
+    return parseInt(String(code || "").replace(/^0x/i, ""), 16);
+  }
+
+  function rgEstadoLabel(sal, estado) {
+    if (!sal) return String(estado);
+    if (sal.tipo === "relay") return Number(estado) === 0 ? "ACTIVAR" : "DESACTIVAR";
+    if (sal.tipo === "compuerta") return Number(estado) === 1 ? "OPEN" : "CLOSE";
+    if (sal.name === "Setpoint") return `${(Number(estado) / 10).toFixed(1)} °C`;
+    if (sal.name === "MOTORES") return `${estado} %`;
+    return String(estado);
+  }
+
+  function rgSalidaActual() {
+    return rgFind(rgTables.salidas, els.rgSalida ? els.rgSalida.value : "");
+  }
+
+  function rgEntradaActual() {
+    return rgFind(rgTables.entradas, els.rgEntrada ? els.rgEntrada.value : "");
+  }
+
+  function rgEstadoValor() {
+    const sal = rgSalidaActual();
+    if (sal && (sal.tipo === "relay" || sal.tipo === "compuerta")) {
+      return Number(els.rgEstadoCombo && els.rgEstadoCombo.value);
+    }
+    return Number(els.rgEstadoNum && els.rgEstadoNum.value);
+  }
+
+  function rgFillSelect(sel, items, keep) {
+    if (!sel) return;
+    const cur = keep || sel.value;
+    sel.innerHTML = (items || [])
+      .map((it) => `<option value="${esc(it.name)}">${esc(it.name)}</option>`)
+      .join("");
+    if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  }
+
+  function rgOnSalidaChange() {
+    const sal = rgSalidaActual();
+    if (els.rgRango) els.rgRango.textContent = (sal && sal.help) || "";
+    const combo = !!(sal && (sal.tipo === "relay" || sal.tipo === "compuerta"));
+    if (els.rgEstadoCombo) els.rgEstadoCombo.hidden = !combo;
+    if (els.rgEstadoNum) {
+      els.rgEstadoNum.hidden = combo;
+      if (sal && !combo) {
+        els.rgEstadoNum.min = sal.min;
+        els.rgEstadoNum.max = sal.max;
+        const v = Number(els.rgEstadoNum.value);
+        if (Number.isNaN(v) || v < sal.min || v > sal.max) els.rgEstadoNum.value = String(sal.min);
+      }
+    }
+    if (combo && els.rgEstadoCombo) {
+      const tabla = sal.tipo === "relay" ? RG_RELAY_EST : RG_GATE_EST;
+      els.rgEstadoCombo.innerHTML = tabla
+        .map((t) => `<option value="${t.val}">${esc(t.txt)}</option>`)
+        .join("");
+    }
+    rgRefreshPreview();
+  }
+
+  function rgReadIf() {
+    const ent = rgEntradaActual();
+    const op = rgFind(rgTables.operadores, els.rgOperador ? els.rgOperador.value : "");
+    const sal = rgSalidaActual();
+    if (!ent || !op || !sal) throw new Error("Complete entrada, operador y salida");
+    const valor = Number(String(els.rgValor.value || "").replace(",", "."));
+    if (Number.isNaN(valor)) throw new Error("El valor a comparar no es un número válido.");
+    if (valor < ent.min || valor > ent.max) {
+      throw new Error(`El valor debe estar entre ${ent.min} y ${ent.max} ${ent.unit}.`);
+    }
+    const estado = rgEstadoValor();
+    if (!Number.isFinite(estado) || estado < sal.min || estado > sal.max) {
+      throw new Error(`El estado de ${sal.name} debe estar entre ${sal.min} y ${sal.max}.`);
+    }
+    const permanente = !!(els.rgPerm && els.rgPerm.checked);
+    let tiempo = 0;
+    if (!permanente) {
+      tiempo = Number(els.rgTiempo && els.rgTiempo.value);
+      if (!Number.isInteger(tiempo) || tiempo < 0 || tiempo > 65534) {
+        throw new Error("El tiempo debe estar entre 0 y 65534 segundos.");
+      }
+    }
+    const modo = rgModo();
+    const raw = Math.round(valor * 10);
+    const tHex = permanente ? "FEFE" : rgB2(tiempo, modo);
+    const codigo =
+      rgB1(0x50) +
+      rgB1(rgCodeByte(ent.code)) +
+      rgB1(rgCodeByte(op.code)) +
+      rgB2(raw, modo) +
+      rgB1(rgCodeByte(sal.code)) +
+      rgB2(estado, modo) +
+      tHex;
+    const tTxt = permanente ? "permanente" : `${tiempo} s`;
+    const desc = `SI ${ent.name} ${op.simbolo} ${valor} ${ent.unit} → ${sal.name} = ${rgEstadoLabel(sal, estado)} (${tTxt})`;
+    return {
+      tipo: "if",
+      entrada: ent.name,
+      operador: op.name,
+      valor,
+      salida: sal.name,
+      estado,
+      tiempo: permanente ? null : tiempo,
+      permanente,
+      codigo,
+      descripcion: desc,
+      timed: !permanente,
+    };
+  }
+
+  function rgRefreshPreview() {
+    if (els.rgTiempo) els.rgTiempo.disabled = !!(els.rgPerm && els.rgPerm.checked);
+    const ent = rgEntradaActual();
+    if (els.rgUnidad && ent) {
+      const now = rgLive.info ? rgLive.info[ent.live_key] : null;
+      const nowTxt = now == null ? "" : ` · ahora ${now} ${ent.unit}`;
+      els.rgUnidad.textContent = `${ent.unit}   (x10 → 2 bytes)${nowTxt}`;
+    }
+    if (!els.rgPreview) return;
+    try {
+      const r = rgReadIf();
+      els.rgPreview.textContent = `→  ${rgGroup(r.codigo)}`;
+      els.rgPreview.classList.remove("bad");
+    } catch (e) {
+      els.rgPreview.textContent = `→  ${e.message || e}`;
+      els.rgPreview.classList.add("bad");
+    }
+    rgRefreshOut();
+  }
+
+  function rgRefreshOut() {
+    const hex = rgProgram.map((r) => r.codigo).join("");
+    const ident = (els.rgIdent && els.rgIdent.value) || "POLLO_BEBE";
+    const pref = (els.rgPrefijo && els.rgPrefijo.value) || "PANTALLA_CMD:";
+    const trama = JSON.stringify({ i: ident, rs: pref + hex });
+    if (els.rgOut) {
+      els.rgOut.textContent = hex ? `${rgGroup(hex)}\n\n${trama}` : "(sin condicionales)";
+    }
+    return { hex, ident, pref, trama };
+  }
+
+  function rgRepaint() {
+    if (!els.rgBody) return;
+    els.rgBody.innerHTML = "";
+    rgProgram.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      if (i === rgSel) tr.className = "sel";
+      tr.innerHTML =
+        `<td>${i + 1}</td><td>${esc(r.descripcion)}</td><td class="mono">${esc(rgGroup(r.codigo))}</td>`;
+      tr.addEventListener("click", () => {
+        rgSel = i;
+        rgRepaint();
+      });
+      els.rgBody.appendChild(tr);
+    });
+    rgRefreshOut();
+  }
+
+  function rgApiItems() {
+    return rgProgram.map((r) => {
+      if (r.tipo === "else") return { tipo: "else" };
+      if (r.tipo === "endif") return { tipo: "endif" };
+      return {
+        tipo: "if",
+        entrada: r.entrada,
+        operador: r.operador,
+        valor: r.valor,
+        salida: r.salida,
+        estado: r.estado,
+        tiempo: r.tiempo || 0,
+        permanente: !!r.permanente,
+      };
+    });
+  }
+
+  function rgRenderLive(data) {
+    rgLive = (data && data.live) || { info: {}, relays: [], motores: [] };
+    const info = rgLive.info || {};
+    const relays = rgLive.relays || [];
+    const motores = rgLive.motores || [];
+    const online = !!(data && data.online);
+    if (els.reglasOnline) els.reglasOnline.textContent = online ? "en línea" : "sin sesión";
+    if (els.reglasBanner) {
+      els.reglasBanner.classList.toggle("on", online);
+      els.reglasBanner.classList.toggle("off", !online);
+      els.reglasBanner.textContent = online
+        ? "Equipo en línea. El programa entra a la misma cola FIFO que Comandos (el primero encolado sale primero). Son acciones con tiempo, no consignas."
+        : "Sin sesión: se guarda como referencia en la misma cola. No se envía. Se cancela a las 2 h. No reemplaza MP-5000 ni SET_RELE.";
+    }
+    if (!els.reglasLive) return;
+    let html =
+      kpiHtml("Supply", fmtStatusVal(info.supply_air_c, " °C")) +
+      kpiHtml("Return", fmtStatusVal(info.return_air_c, " °C")) +
+      kpiHtml("SP temp", fmtStatusVal(info.setpoint_c, " °C")) +
+      kpiHtml("CO₂", fmtStatusVal(info.co2_pct, " %")) +
+      kpiHtml("USDA1", fmtStatusVal(info.usda1_c, " °C")) +
+      kpiHtml("USDA2", fmtStatusVal(info.usda2_c, " °C")) +
+      kpiHtml("USDA3", fmtStatusVal(info.usda3_c, " °C")) +
+      kpiHtml("USDA4", fmtStatusVal(info.usda4_c, " °C")) +
+      kpiHtml("Humedad", fmtStatusVal(info.humidity_pct != null ? info.humidity_pct : rgLive.humidity_pct, " %")) +
+      kpiHtml("SP humedad", fmtStatusVal(info.humidity_setpoint_pct, " %"));
+    for (const r of relays) {
+      html += kpiHtml(`R${r.id} ${r.name || ""}`.trim(), r.on ? "ON" : "OFF");
+    }
+    if (!motores.length) {
+      html += kpiHtml("Motor 1", "—") + kpiHtml("Motor 2", "—") + kpiHtml("Motor 3", "—") + kpiHtml("Motor 4", "—");
+    } else {
+      for (const m of motores) {
+        html += kpiHtml(
+          m.label || `Motor ${m.id}`,
+          m.volts == null ? "—" : `${m.volts} V · ${m.speed_pct ?? "—"} %`
+        );
+      }
+    }
+    els.reglasLive.innerHTML = html;
+  }
+
+  function rgEnsureTables(tables) {
+    rgTables = tables || rgTables;
+    if (!rgFilled && rgTables.entradas && rgTables.entradas.length) {
+      rgFillSelect(els.rgEntrada, rgTables.entradas);
+      rgFillSelect(els.rgOperador, rgTables.operadores);
+      rgFillSelect(els.rgSalida, rgTables.salidas);
+      if (els.rgEntrada) els.rgEntrada.value = "Suministro";
+      if (els.rgOperador) {
+        const mayor = rgTables.operadores.find((o) => o.simbolo === ">");
+        if (mayor) els.rgOperador.value = mayor.name;
+      }
+      if (els.rgSalida) els.rgSalida.value = "RELAY1";
+      rgFilled = true;
+      rgOnSalidaChange();
+    }
+  }
+
+  function renderRgQueue(data) {
+    if (!els.rgQueue) return;
+    const items = (data && data.items) || [];
+    if (!items.length) {
+      els.rgQueue.innerHTML = "<p class='hint'>Cola vacía. Misma línea FIFO que la pestaña Comandos.</p>";
+      return;
+    }
+    els.rgQueue.innerHTML = items
+      .map((it) => {
+        const tag = it.kind === "pantalla_cmd" ? "regla" : it.kind || "";
+        return (
+          `<div class="q-item"><span class="kind-badge kind-${esc(it.status)}">${esc(it.status)}</span> ` +
+          `<span class="kind-badge">${esc(tag)}</span> ` +
+          `${esc(it.label || it.rs || "")}<br><code>${esc(it.rs || "")}</code> ` +
+          `<button type="button" class="btn ghost" data-cancel="${esc(it.queue_id)}">Cancelar</button></div>`
+        );
+      })
+      .join("");
+    els.rgQueue.querySelectorAll("[data-cancel]").forEach((btn) => {
+      btn.addEventListener("click", () => cancelComando(btn.dataset.cancel));
+    });
+  }
+
+  async function loadReglas() {
+    const p = cmdScope();
+    if (selected && selected.addr) p.set("addr", selected.addr);
+    try {
+      const [cat, queue] = await Promise.all([
+        fetch(`${API}/api/reglas/catalog?${p}`).then((r) => r.json()),
+        fetch(`${API}/api/comandos/queue?${selected && selected.ip ? "ip=" + encodeURIComponent(selected.ip) : ""}`).then((r) => r.json()),
+      ]);
+      rgEnsureTables(cat.tables);
+      rgRenderLive(cat);
+      renderRgQueue(queue);
+      rgRefreshPreview();
+      if (els.reglasMeta) {
+        els.reglasMeta.textContent =
+          `${queue.queued || 0} en cola · ${queue.reference || 0} referencia(s) · acciones con tiempo · motores = 4 analógicas`;
+      }
+    } catch (e) {
+      if (els.reglasMeta) els.reglasMeta.textContent = String(e);
+    }
+  }
+
+  function rgBind() {
+    ["rgEntrada", "rgOperador", "rgValor", "rgEstadoNum", "rgTiempo", "rgIdent"].forEach((k) => {
+      if (els[k]) els[k].addEventListener("input", rgRefreshPreview);
+      if (els[k]) els[k].addEventListener("change", rgRefreshPreview);
+    });
+    if (els.rgSalida) els.rgSalida.addEventListener("change", rgOnSalidaChange);
+    if (els.rgEstadoCombo) els.rgEstadoCombo.addEventListener("change", rgRefreshPreview);
+    if (els.rgPerm) els.rgPerm.addEventListener("change", rgRefreshPreview);
+    document.querySelectorAll('input[name="rgModo"]').forEach((el) => {
+      el.addEventListener("change", rgRefreshPreview);
+    });
+    if (els.rgAddIf) {
+      els.rgAddIf.addEventListener("click", () => {
+        try {
+          rgProgram.push(rgReadIf());
+          rgSel = rgProgram.length - 1;
+          rgRepaint();
+        } catch (e) {
+          alert(e.message || e);
+        }
+      });
+    }
+    if (els.rgAddElse) {
+      els.rgAddElse.addEventListener("click", () => {
+        rgProgram.push({ tipo: "else", codigo: "53", descripcion: "--- ELSE ---" });
+        rgSel = rgProgram.length - 1;
+        rgRepaint();
+      });
+    }
+    if (els.rgAddEndif) {
+      els.rgAddEndif.addEventListener("click", () => {
+        rgProgram.push({ tipo: "endif", codigo: "51", descripcion: "--- FIN IF ---" });
+        rgSel = rgProgram.length - 1;
+        rgRepaint();
+      });
+    }
+    if (els.rgUp) {
+      els.rgUp.addEventListener("click", () => {
+        if (rgSel <= 0) return;
+        const j = rgSel - 1;
+        [rgProgram[rgSel], rgProgram[j]] = [rgProgram[j], rgProgram[rgSel]];
+        rgSel = j;
+        rgRepaint();
+      });
+    }
+    if (els.rgDown) {
+      els.rgDown.addEventListener("click", () => {
+        if (rgSel < 0 || rgSel >= rgProgram.length - 1) return;
+        const j = rgSel + 1;
+        [rgProgram[rgSel], rgProgram[j]] = [rgProgram[j], rgProgram[rgSel]];
+        rgSel = j;
+        rgRepaint();
+      });
+    }
+    if (els.rgDel) {
+      els.rgDel.addEventListener("click", () => {
+        if (rgSel < 0) return;
+        rgProgram.splice(rgSel, 1);
+        if (rgSel >= rgProgram.length) rgSel = rgProgram.length - 1;
+        rgRepaint();
+      });
+    }
+    if (els.rgClear) {
+      els.rgClear.addEventListener("click", () => {
+        if (!rgProgram.length || !confirm("¿Borrar todas las condicionales?")) return;
+        rgProgram = [];
+        rgSel = -1;
+        rgRepaint();
+      });
+    }
+    if (els.rgEnqueue) {
+      els.rgEnqueue.addEventListener("click", () => {
+        if (!rgProgram.length) {
+          alert("Agregue al menos una condicional");
+          return;
+        }
+        enqueueComando({
+          ...cmdBodyBase(),
+          ident: (els.rgIdent && els.rgIdent.value) || "POLLO_BEBE",
+          kind: "pantalla_cmd",
+          modo: rgModo(),
+          reglas: rgApiItems(),
+        });
+      });
+    }
+    if (els.rgCopyJson) {
+      els.rgCopyJson.addEventListener("click", async () => {
+        const { trama } = rgRefreshOut();
+        try {
+          await navigator.clipboard.writeText(trama);
+        } catch (_) {}
+      });
+    }
+    if (els.rgCopyHex) {
+      els.rgCopyHex.addEventListener("click", async () => {
+        const { hex } = rgRefreshOut();
+        try {
+          await navigator.clipboard.writeText(hex);
+        } catch (_) {}
+      });
+    }
+    if (els.btnRefreshReglas) els.btnRefreshReglas.addEventListener("click", loadReglas);
+  }
+
+  rgBind();
 
   setInterval(refreshHomoQueue, 2000);
   setInterval(() => {

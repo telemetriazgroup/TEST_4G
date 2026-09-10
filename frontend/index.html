@@ -52,6 +52,14 @@
       Seguimiento
       <small>decodificado · por fecha</small>
     </button>
+    <button type="button" class="tab" data-tab="cmd" role="tab" aria-selected="false">
+      Comandos
+      <small>constructor · cola · ventanas</small>
+    </button>
+    <button type="button" class="tab" data-tab="reglas" role="tab" aria-selected="false">
+      Reglas
+      <small>IF / ELSE · acciones con tiempo</small>
+    </button>
   </nav>
 
   <main class="layout">
@@ -273,6 +281,160 @@
           <p id="statusMeta" class="hint">Tabla seguimiento · INFO pantalla · RELAY control · MP-5000 equipo</p>
         </div>
       </div>
+    </section>
+
+    <!-- COMANDOS -->
+    <section class="panel monitor tab-panel" id="panelCmd">
+      <div class="panel-head">
+        <h2 id="cmdTitle">Comandos</h2>
+        <span id="cmdOnline" class="badge">—</span>
+        <span id="cmdWindow" class="badge">ventana —</span>
+        <button type="button" id="btnRefreshCmd" class="btn primary">Actualizar</button>
+        <button type="button" id="btnClearCmd" class="btn ghost">Limpiar pendientes</button>
+      </div>
+      <p id="cmdBanner" class="cmd-banner">Selecciona un equipo en línea. Si no hay sesión, el comando queda como referencia (se cancela a las 2 h).</p>
+      <div class="cmd-layout">
+        <div class="cmd-col">
+          <h3>Pantalla / equipo (último seguimiento)</h3>
+          <div id="cmdScreen" class="status-kpis"></div>
+          <h3>Setpoints MP-5000</h3>
+          <p class="hint">El valor se escribe en unidades reales. El <code>fp</code> lo aplica el constructor. Un comando por ventana libre (V1 tras RELAY_DATA, V2 tras INFO).</p>
+          <div id="cmdFields"></div>
+          <h3>Acciones</h3>
+          <div id="cmdActions"></div>
+        </div>
+        <div class="cmd-col">
+          <h3>Relés RELAY001 (0 = ON, 1 = OFF)</h3>
+          <p class="hint">Se arma el string de 10 bits a partir del estado actual. Cambia solo lo necesario.</p>
+          <div id="cmdRelays"></div>
+          <div class="cmd-row">
+            <code id="cmdRelayBits">1111111111</code>
+            <button type="button" id="btnEnqueueRelay" class="btn primary">Encolar relés</button>
+          </div>
+          <h3>Salida analógica SET_POT</h3>
+          <p class="hint">Un entero 0–1000 = 0–10 V. Aún no está confirmado si mueve 1 o 4 canales.</p>
+          <div class="cmd-row">
+            <label>Voltios <input id="cmdPotV" type="number" min="0" max="10" step="0.1" value="0" /></label>
+            <span id="cmdPotHint" class="mono">n=0 · 0%</span>
+            <button type="button" id="btnEnqueuePot" class="btn primary">Encolar pot</button>
+          </div>
+          <h3>Cola y referencias</h3>
+          <div id="cmdQueue" class="cmd-queue"></div>
+          <h3>Registro de envíos</h3>
+          <div id="cmdSentWrap" class="hours-wrap">
+            <table class="capture-table" id="cmdSentTable">
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Estado</th>
+                  <th>Etiqueta</th>
+                  <th>rs</th>
+                  <th>Ventana</th>
+                </tr>
+              </thead>
+              <tbody id="cmdSentBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <p id="cmdMeta" class="hint">Constructor didáctico · cola solo en línea · referencia si no hay sesión · TTL 2 h</p>
+    </section>
+
+    <!-- REGLAS / PANTALLA_CMD (generador condicionales) -->
+    <section class="panel monitor tab-panel" id="panelReglas">
+      <div class="panel-head">
+        <h2 id="reglasTitle">Reglas</h2>
+        <span id="reglasOnline" class="badge">—</span>
+        <button type="button" id="btnRefreshReglas" class="btn primary">Actualizar</button>
+      </div>
+      <p id="reglasBanner" class="cmd-banner">Programa IF/ELSE de pantalla. Acciones con tiempo (no consignas). Comparte la cola FIFO de Comandos: el primero encolado sale primero.</p>
+
+      <div class="reglas-scroll">
+        <div id="reglasLive" class="reglas-live"></div>
+
+        <fieldset class="reglas-box">
+          <legend>Nueva condicional</legend>
+          <div class="reglas-grid">
+            <label>Entrada
+              <select id="rgEntrada"></select>
+            </label>
+            <label>Operador
+              <select id="rgOperador"></select>
+            </label>
+            <label>Valor
+              <span class="reglas-val">
+                <input id="rgValor" type="number" step="0.1" value="22.0" />
+                <span id="rgUnidad" class="hint">°C</span>
+              </span>
+            </label>
+            <label>Salida
+              <select id="rgSalida"></select>
+            </label>
+            <label>Estado
+              <select id="rgEstadoCombo"></select>
+              <input id="rgEstadoNum" type="number" min="0" max="100" step="1" value="0" hidden />
+            </label>
+            <p id="rgRango" class="hint reglas-span">Lógica invertida: 0 activa, 1 apaga</p>
+            <label>Tiempo (s)
+              <input id="rgTiempo" type="number" min="0" max="65534" step="1" value="5" />
+            </label>
+            <label class="reglas-check">
+              <input id="rgPerm" type="checkbox" />
+              Permanente (FEFE)
+            </label>
+            <fieldset class="reglas-fmt">
+              <legend>Campos de 2 bytes</legend>
+              <label><input type="radio" name="rgModo" value="DEC" checked /> BCD (0220 = 22.0)</label>
+              <label><input type="radio" name="rgModo" value="HEX" /> HEX (00DC = 22.0)</label>
+            </fieldset>
+          </div>
+          <p id="rgPreview" class="reglas-preview">→</p>
+        </fieldset>
+
+        <div class="reglas-toolbar">
+          <button type="button" id="rgAddIf" class="btn primary">Agregar condicional</button>
+          <button type="button" id="rgAddElse" class="btn ghost">Agregar ELSE (53)</button>
+          <button type="button" id="rgAddEndif" class="btn ghost">Agregar FIN IF (51)</button>
+          <button type="button" id="rgUp" class="btn ghost">Subir</button>
+          <button type="button" id="rgDown" class="btn ghost">Bajar</button>
+          <button type="button" id="rgDel" class="btn ghost">Eliminar</button>
+          <button type="button" id="rgClear" class="btn ghost">Limpiar todo</button>
+        </div>
+
+        <fieldset class="reglas-box">
+          <legend>Programa</legend>
+          <div class="hours-wrap">
+            <table class="capture-table" id="rgTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Descripción</th>
+                  <th>Código</th>
+                </tr>
+              </thead>
+              <tbody id="rgBody"></tbody>
+            </table>
+          </div>
+        </fieldset>
+
+        <fieldset class="reglas-box">
+          <legend>Trama a enviar</legend>
+          <div class="cmd-row">
+            <label>ID ("i") <input id="rgIdent" type="text" value="POLLO_BEBE" /></label>
+            <label>Prefijo <input id="rgPrefijo" type="text" value="PANTALLA_CMD:" readonly /></label>
+            <button type="button" id="rgEnqueue" class="btn primary">Encolar programa</button>
+            <button type="button" id="rgCopyJson" class="btn ghost">Copiar JSON</button>
+            <button type="button" id="rgCopyHex" class="btn ghost">Copiar HEX</button>
+          </div>
+          <pre id="rgOut" class="reglas-out">(sin condicionales)</pre>
+        </fieldset>
+
+        <fieldset class="reglas-box">
+          <legend>Cola compartida (FIFO · misma línea que Comandos)</legend>
+          <div id="rgQueue" class="cmd-queue"></div>
+        </fieldset>
+      </div>
+      <p id="reglasMeta" class="hint">PANTALLA_CMD · acciones temporizadas · no reemplaza MP-5000 ni SET_RELE · motores = 4 analógicas RELAY</p>
     </section>
   </main>
 

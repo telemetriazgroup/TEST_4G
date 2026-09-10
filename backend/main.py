@@ -25,9 +25,11 @@ from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-import homologate as homo
+import comandos as cmdb
 import decode_rs
 import decode_tk
+import homologate as homo
+import reglas as regl
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g")
@@ -51,6 +53,8 @@ _queue: deque[dict[str, Any]] = deque()
 _queue_wake = asyncio.Event()
 _decode_q: deque[dict[str, Any]] = deque()
 _decode_wake = asyncio.Event()
+_cmd_win: dict[str, dict[str, Any]] = {}
+_cmd_lock = asyncio.Lock()
 _queue_state: dict[str, Any] = {
     "running": False,
     "paused": False,
@@ -96,6 +100,24 @@ class ConnectBody(BaseModel):
 class RelayLabelsBody(BaseModel):
     ident: str
     names: dict[str, str] = Field(default_factory=dict)
+
+
+class ComandoBody(BaseModel):
+    ident: str = "POLLO_BEBE"
+    addr: str | None = None
+    ip: str | None = None
+    session_id: str | None = None
+    kind: str = "mp5000_write"
+    idx: int | None = None
+    value: Any = None
+    fp: int | None = None
+    bits: str | None = None
+    pot: int | None = None
+    hex: str | None = None
+    reglas: list[dict[str, Any]] | None = None
+    modo: str = "DEC"
+    label: str | None = None
+    window: str = "any"
 
 
 class HomologateEnqueueBody(BaseModel):
@@ -278,10 +300,15 @@ async def startup() -> None:
         pass
     await db.seguimiento.create_index([("message_id", 1), ("kind", 1)], unique=True, sparse=True)
     await db.relay_labels.create_index("ident", unique=True)
+    await db.comandos.create_index([("status", 1), ("enqueued_at", 1)])
+    await db.comandos.create_index([("addr", 1), ("status", 1)])
+    await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
+    await db.comandos.create_index([("enqueued_at", -1)])
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
     asyncio.create_task(_backfill_seguimiento())
+    asyncio.create_task(_comandos_janitor())
 
 
 @app.on_event("shutdown")
@@ -417,6 +444,7 @@ async def internal_telemetry(body: TelemetryBody):
 
     asyncio.create_task(_homologate_after_persist(doc))
     _enqueue_seguimiento(doc)
+    asyncio.create_task(_comandos_on_rx(doc))
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -781,6 +809,243 @@ async def _backfill_seguimiento(limit: int = 2000) -> int:
     except Exception:
         log.exception("backfill seguimiento falló")
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Comandos (ventanas TX + cola + registro)
+# ---------------------------------------------------------------------------
+
+def _cmd_ttl_cutoff() -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=cmdb.COMMAND_TTL_S)).isoformat()
+
+
+async def _session_online(
+    *, addr: str | None = None, ip: str | None = None, session_id: str | None = None
+) -> dict[str, Any] | None:
+    if session_id:
+        found = await db.sessions.find_one({"session_id": session_id, "is_active": True})
+        if found:
+            return found
+    if addr:
+        found = await db.sessions.find_one({"addr": addr, "is_active": True})
+        if found:
+            return found
+        found = await db.sessions.find_one({"addrs": addr, "is_active": True})
+        if found:
+            return found
+    if ip:
+        return await db.sessions.find_one({"ip": ip, "is_active": True}, sort=[("last_seen", -1)])
+    return None
+
+
+async def _is_online(addr: str | None, ip: str | None, session_id: str | None) -> tuple[bool, dict[str, Any] | None]:
+    sess = await _session_online(addr=addr, ip=ip, session_id=session_id)
+    if not sess:
+        return False, None
+    if addr:
+        dev = await db.devices.find_one({"addr": addr}, {"is_connected": 1})
+        if dev is not None and not dev.get("is_connected"):
+            return False, sess
+    return True, sess
+
+
+def _window_open_for(addr: str | None, ip: str | None) -> dict[str, Any] | None:
+    now = time.monotonic()
+    if addr:
+        w = _cmd_win.get(addr)
+        if w and w.get("open") and float(w.get("until") or 0) > now:
+            return w
+    if ip:
+        for w in _cmd_win.values():
+            if w.get("ip") == ip and w.get("open") and float(w.get("until") or 0) > now:
+                return w
+    return None
+
+
+def _built_comando(body: ComandoBody) -> dict[str, Any]:
+    ident = (body.ident or cmdb.IDENT_DEFAULT).strip() or cmdb.IDENT_DEFAULT
+    kind = (body.kind or "mp5000_write").strip()
+    if kind == "mp5000_write":
+        if body.idx is None:
+            raise HTTPException(400, "idx requerido")
+        return cmdb.build_mp5000(int(body.idx), body.value, body.fp, ident)
+    if kind == "relay_set":
+        if not body.bits:
+            raise HTTPException(400, "bits requerido (10 dígitos 0/1)")
+        return cmdb.build_relay(body.bits, ident)
+    if kind == "relay_pot":
+        if body.pot is None:
+            raise HTTPException(400, "pot requerido (0..1000)")
+        return cmdb.build_pot(int(body.pot), ident)
+    if kind == "pantalla_cmd":
+        if body.reglas:
+            built = regl.build_program(body.reglas, ident=ident, modo=body.modo or "DEC")
+        elif body.hex:
+            hx = "".join(str(body.hex).split()).upper()
+            if not hx or len(hx) % 2:
+                raise HTTPException(400, "hex de programa inválido")
+            rs = regl.PREFIJO + hx
+            payload = {"i": ident, "rs": rs}
+            built = {
+                "kind": "pantalla_cmd",
+                "i": ident,
+                "rs": rs,
+                "payload": payload,
+                "hex": hx,
+                "line": cmdb.encode_line(payload),
+                "label": body.label or "PANTALLA_CMD",
+                "timed": True,
+                "ok": True,
+                "errors": [],
+            }
+        else:
+            raise HTTPException(400, "reglas o hex requerido")
+        if not built.get("ok", True):
+            raise HTTPException(400, "; ".join(built.get("errors") or ["programa inválido"]))
+        if body.label:
+            built["label"] = body.label
+        return built
+    raise HTTPException(400, "kind no soportado")
+
+
+async def _expire_comandos() -> int:
+    cutoff = _cmd_ttl_cutoff()
+    q = {
+        "status": {"$in": ["queued", "window_wait", "reference"]},
+        "enqueued_at": {"$lt": cutoff},
+    }
+    rows = await db.comandos.find(q).to_list(500)
+    now = _now()
+    n = 0
+    for row in rows:
+        await db.comandos.update_one(
+            {"_id": row["_id"]},
+            {"$set": {"status": "canceled", "reason": "expired_2h", "canceled_at": now}},
+        )
+        n += 1
+    if n:
+        log.info("comandos: %s cancelados por TTL 2h", n)
+        await broadcast({"type": "comando", "action": "expired", "count": n})
+    return n
+
+
+async def _comandos_janitor() -> None:
+    while True:
+        try:
+            await _expire_comandos()
+        except Exception:
+            log.exception("comandos janitor")
+        await asyncio.sleep(30)
+
+
+async def _comandos_on_rx(doc: dict[str, Any]) -> None:
+    try:
+        if (doc.get("direction") or "rx").lower() != "rx":
+            return
+        action = cmdb.classify_window(doc.get("text") or "")
+        if not action:
+            return
+        addr = doc.get("addr") or ""
+        if action == "close":
+            prev = _cmd_win.get(addr) or {}
+            _cmd_win[addr] = {
+                "open": False,
+                "name": None,
+                "until": 0,
+                "ip": doc.get("ip"),
+                "session_id": doc.get("session_id"),
+            }
+            if prev.get("open"):
+                await broadcast({"type": "comando", "action": "window_close", "addr": addr})
+            return
+        _cmd_win[addr] = {
+            "open": True,
+            "name": action,
+            "until": time.monotonic() + cmdb.TX_BUDGET_S,
+            "ip": doc.get("ip"),
+            "session_id": doc.get("session_id"),
+            "opened_at": _now(),
+        }
+        await broadcast({"type": "comando", "action": "window_open", "window": action, "addr": addr})
+        await _try_send_one_comando(addr=addr, ip=doc.get("ip"), window=action)
+    except Exception:
+        log.exception("comandos on_rx")
+
+
+async def _bridge_send_line(addr: str | None, ip: str | None, line: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"message": line, "encoding": "string"}
+    if addr:
+        payload["addr"] = addr
+    if ip:
+        payload["ip"] = ip
+    async with httpx.AsyncClient(timeout=5.0) as http:
+        r = await http.post(f"{BRIDGE_URL}/send", json=payload)
+        return r.json()
+
+
+async def _try_send_one_comando(*, addr: str | None, ip: str | None, window: str) -> dict[str, Any] | None:
+    async with _cmd_lock:
+        await _expire_comandos()
+        online, sess = await _is_online(addr, ip, None)
+        if not online:
+            return None
+        q: dict[str, Any] = {"status": {"$in": ["queued", "window_wait"]}}
+        if addr:
+            q["$or"] = [{"addr": addr}, {"ip": ip}] if ip else [{"addr": addr}]
+        elif ip:
+            q["ip"] = ip
+        else:
+            return None
+        job = await db.comandos.find_one(q, sort=[("enqueued_at", 1)])
+        if not job:
+            return None
+        win = _window_open_for(addr, ip)
+        if not win:
+            await db.comandos.update_one({"_id": job["_id"]}, {"$set": {"status": "window_wait"}})
+            return None
+        line = cmdb.encode_line(job.get("payload") or {"i": job.get("i"), "rs": job.get("rs")})
+        try:
+            result = await _bridge_send_line(job.get("addr") or addr, job.get("ip") or ip, line)
+        except Exception as e:
+            await db.comandos.update_one(
+                {"_id": job["_id"]},
+                {"$set": {"status": "error", "reason": str(e), "sent_at": _now()}},
+            )
+            await broadcast({"type": "comando", "action": "error", "id": str(job.get("queue_id") or job["_id"])})
+            return None
+        ok = bool(result.get("ok"))
+        now = _now()
+        await db.comandos.update_one(
+            {"_id": job["_id"]},
+            {
+                "$set": {
+                    "status": "sent" if ok else "error",
+                    "reason": None if ok else (result.get("error") or "send_failed"),
+                    "sent_at": now,
+                    "window_used": win.get("name") or window,
+                    "http": result,
+                    "session_id": job.get("session_id") or (sess or {}).get("session_id"),
+                }
+            },
+        )
+        snap = await db.comandos.find_one({"_id": job["_id"]}, {"_id": 0})
+        await broadcast({"type": "comando", "action": "sent" if ok else "error", **(snap or {})})
+        log.info("comando %s i=%s rs=%s win=%s", "ok" if ok else "error", job.get("i"), job.get("rs"), win.get("name"))
+        return snap
+
+
+async def _latest_by_kind(ident: str | None, ip: str | None) -> dict[str, Any]:
+    q: dict[str, Any] = {}
+    if ident:
+        q["i"] = ident
+    if ip:
+        q["ip"] = ip
+    out: dict[str, Any] = {}
+    for kind in ("info", "relay", "mp5000"):
+        row = await db.seguimiento.find_one({**q, "kind": kind}, {"_id": 0}, sort=[("ts", -1)])
+        if row:
+            out[kind] = row
+    return out
 
 
 def _candidate_from_doc(doc: dict[str, Any]) -> dict[str, Any] | None:
@@ -1203,6 +1468,229 @@ async def put_relay_labels(body: RelayLabelsBody):
         upsert=True,
     )
     return await get_relay_labels(ident)
+
+
+@app.get("/api/comandos/catalog")
+async def comandos_catalog(ident: str = "POLLO_BEBE", ip: str | None = None):
+    latest = await _latest_by_kind(ident, ip)
+    names = await _relay_names_for(ident)
+    cat = cmdb.catalog(latest, names)
+    online, sess = await _is_online(None, ip, None)
+    return {
+        "ident": ident,
+        "online": online,
+        "session_id": (sess or {}).get("session_id"),
+        "window": next((w for w in _cmd_win.values() if w.get("ip") == ip and w.get("open")), None)
+        if ip
+        else None,
+        **cat,
+    }
+
+
+@app.post("/api/comandos/preview")
+async def comandos_preview(body: ComandoBody):
+    try:
+        built = _built_comando(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    line = cmdb.encode_line(built["payload"])
+    online, sess = await _is_online(body.addr, body.ip, body.session_id)
+    return {
+        "ok": True,
+        "built": built,
+        "line": line,
+        "online": online,
+        "would_queue": online,
+        "would_reference": not online,
+        "session_id": (sess or {}).get("session_id"),
+        "ttl_s": cmdb.COMMAND_TTL_S,
+    }
+
+
+@app.post("/api/comandos/enqueue")
+async def comandos_enqueue(body: ComandoBody):
+    await _expire_comandos()
+    try:
+        built = _built_comando(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    online, sess = await _is_online(body.addr, body.ip, body.session_id)
+    now = _now()
+    qid = str(uuid.uuid4())
+    status = "queued" if online else "reference"
+    doc = {
+        "queue_id": qid,
+        "ts": now,
+        "enqueued_at": now,
+        "status": status,
+        "reason": None if online else "offline_or_no_session",
+        "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=cmdb.COMMAND_TTL_S)).isoformat(),
+        "i": built.get("i"),
+        "kind": built.get("kind"),
+        "rs": built.get("rs"),
+        "payload": built.get("payload"),
+        "label": built.get("label"),
+        "expected": built.get("value") if "value" in built else built.get("bits") or built.get("n"),
+        "idx": built.get("idx"),
+        "fp": built.get("fp"),
+        "scaled": built.get("scaled"),
+        "window": body.window or "any",
+        "addr": body.addr,
+        "ip": body.ip,
+        "session_id": body.session_id or (sess or {}).get("session_id"),
+        "origin": "reglas" if built.get("kind") == "pantalla_cmd" else "ui",
+        "timed": bool(built.get("timed")),
+        "built": built,
+    }
+    await db.comandos.insert_one(doc)
+    if online:
+        win = _window_open_for(body.addr, body.ip)
+        if win:
+            await _try_send_one_comando(addr=body.addr, ip=body.ip, window=win.get("name") or "any")
+            fresh = await db.comandos.find_one({"queue_id": qid}, {"_id": 0})
+            if fresh:
+                doc = fresh
+    await broadcast({"type": "comando", "action": "enqueue", "status": doc.get("status"), "queue_id": qid})
+    return {"ok": True, "item": _jsonable(doc), "online": online}
+
+
+@app.get("/api/comandos/queue")
+async def comandos_queue(addr: str | None = None, ip: str | None = None):
+    await _expire_comandos()
+    q: dict[str, Any] = {"status": {"$in": ["queued", "window_wait", "reference"]}}
+    if addr:
+        q["addr"] = addr
+    elif ip:
+        q["ip"] = ip
+    rows = await db.comandos.find(q, {"_id": 0}).sort("enqueued_at", 1).to_list(200)
+    return {
+        "items": rows,
+        "count": len(rows),
+        "queued": sum(1 for r in rows if r.get("status") in {"queued", "window_wait"}),
+        "reference": sum(1 for r in rows if r.get("status") == "reference"),
+        "ttl_s": cmdb.COMMAND_TTL_S,
+        "windows": {
+            k: {kk: vv for kk, vv in v.items() if kk != "until"} | {"open": bool(v.get("open") and float(v.get("until") or 0) > time.monotonic()), "name": v.get("name")}
+            for k, v in _cmd_win.items()
+        },
+    }
+
+
+@app.get("/api/comandos/sent")
+async def comandos_sent(
+    ident: str | None = None,
+    ip: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+):
+    q: dict[str, Any] = {}
+    if ident:
+        q["i"] = ident
+    if ip:
+        q["ip"] = ip
+    if status and status != "all":
+        q["status"] = status
+    limit = max(1, min(limit, 1000))
+    rows = await db.comandos.find(q, {"_id": 0}).sort("enqueued_at", -1).limit(limit).to_list(limit)
+    return {
+        "items": rows,
+        "count": len(rows),
+        "sent": sum(1 for r in rows if r.get("status") == "sent"),
+        "canceled": sum(1 for r in rows if r.get("status") == "canceled"),
+        "errors": sum(1 for r in rows if r.get("status") == "error"),
+    }
+
+
+class ComandoCancelBody(BaseModel):
+    queue_id: str | None = None
+
+
+@app.post("/api/comandos/cancel")
+async def comandos_cancel(body: ComandoCancelBody):
+    if not body.queue_id:
+        raise HTTPException(400, "queue_id requerido")
+    row = await db.comandos.find_one({"queue_id": body.queue_id})
+    if not row:
+        raise HTTPException(404, "comando no encontrado")
+    if row.get("status") not in {"queued", "window_wait", "reference"}:
+        raise HTTPException(400, "solo se cancelan pendientes o referencias")
+    await db.comandos.update_one(
+        {"_id": row["_id"]},
+        {"$set": {"status": "canceled", "reason": "user", "canceled_at": _now()}},
+    )
+    await broadcast({"type": "comando", "action": "canceled", "queue_id": body.queue_id})
+    return {"ok": True, "queue_id": body.queue_id}
+
+
+@app.get("/api/reglas/catalog")
+async def reglas_catalog(ident: str = "POLLO_BEBE", ip: str | None = None, addr: str | None = None):
+    latest = await _latest_by_kind(ident, ip)
+    if not latest.get("info") and not latest.get("relay"):
+        latest = await _latest_by_kind(ident, None)
+    names = await _relay_names_for(ident)
+    info = ((latest.get("info") or {}).get("snapshot") or {})
+    relay = latest.get("relay") or {}
+    rsnap = relay.get("snapshot") or {}
+    relays = []
+    for r in relay.get("relays") or []:
+        rid = r.get("id")
+        relays.append(
+            {
+                **r,
+                "name": r.get("name") or names.get(rid) or f"RELAY{rid}",
+            }
+        )
+    motores = []
+    for a in relay.get("analogs") or []:
+        motores.append(
+            {
+                "id": a.get("id"),
+                "label": f"Motor {a.get('id')}",
+                "source": a.get("label"),
+                "volts": a.get("volts"),
+                "speed_pct": a.get("speed_pct"),
+            }
+        )
+    online, sess = await _is_online(addr, ip, None)
+    return {
+        "ident": ident,
+        "online": online,
+        "session_id": (sess or {}).get("session_id"),
+        "tables": regl.tables(),
+        "live": {
+            "info": info,
+            "relays": relays,
+            "motores": motores,
+            "humidity_pct": info.get("humidity_pct") if info.get("humidity_pct") is not None else rsnap.get("humidity_pct"),
+        },
+        "nota": "Acciones con tiempo: no reemplazan consignas MP-5000 ni SET_RELE. Motores = 4 analógicas de RELAY_DATA.",
+    }
+
+
+class ReglasPreviewBody(BaseModel):
+    ident: str = "POLLO_BEBE"
+    modo: str = "DEC"
+    reglas: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/api/reglas/preview")
+async def reglas_preview(body: ReglasPreviewBody):
+    try:
+        built = regl.build_program(body.reglas, ident=body.ident, modo=body.modo or "DEC")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return built
+
+
+@app.post("/api/comandos/queue/clear")
+async def comandos_queue_clear():
+    now = _now()
+    result = await db.comandos.update_many(
+        {"status": {"$in": ["queued", "window_wait", "reference"]}},
+        {"$set": {"status": "canceled", "reason": "cleared", "canceled_at": now}},
+    )
+    await broadcast({"type": "comando", "action": "cleared", "count": result.modified_count})
+    return {"ok": True, "canceled": result.modified_count}
 
 
 @app.get("/api/unit-status")
