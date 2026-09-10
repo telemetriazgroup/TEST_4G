@@ -8,7 +8,7 @@ Este documento **no implementa** el envío. Define qué se procesa, cuándo se d
 
 ## 1. Objetivo
 
-Cada vez que un equipo envía por TCP **9910** una trama POLLO de datos (campos `d01`…`d05` con payloads `82A7xx`), el sistema debe:
+Cada vez que un equipo envía por TCP **9911** una trama POLLO de datos (campos `d01`…`d05` con payloads `82A7xx`), el sistema debe:
 
 1. Separar los JSON concatenados de esa recepción.
 2. Identificar los bloques hex por **opcode** (`82A700`, `82A701`, `82A706`), no solo por el nombre del campo.
@@ -18,7 +18,7 @@ Cada vez que un equipo envía por TCP **9910** una trama POLLO de datos (campos 
 El resto de tramas (`rs`, cabeceras TCP, TX) **no se envían**. Quedan en MongoDB como estado / histórico.
 
 ```
-Dispositivo ──TCP:9910──► tcp_bridge ──► MongoDB (todas las tramas)
+Dispositivo ──TCP:9911──► tcp_bridge ──► MongoDB (todas las tramas)
                               │
                               ▼ (solo trama POLLO de datos)
                          homologar → POST link configurado
@@ -76,7 +76,7 @@ Orden observado en el histórico:
 
 | Tipo | Ejemplo ASCII | ¿POST estándar? |
 |------|----------------|-----------------|
-| Cabecera | `CONNECT ip:port → 9910` | No |
+| Cabecera | `CONNECT ip:port → 9911` | No |
 | Comando / status | `{"i":"POLLO_BEBE","rs":"RELAY001_GET_DATA"}` | No |
 | Status | `{"rs":"MP5000_GET_DATA"}` | No |
 | Status | `{"rs":"MP5000_OK"}` | No |
@@ -161,7 +161,7 @@ El segundo objeto del mismo frame (`MP5000_GET_INFO`) se descarta para el POST.
 
 ## 4. Pipeline cada vez que llega una trama
 
-Ejecutar **después** de persistir en MongoDB (no bloquear el socket 9910).
+Ejecutar **después** de persistir en MongoDB (no bloquear el socket 9911).
 
 ```
 RX frame (hex/ascii)

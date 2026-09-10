@@ -1,7 +1,7 @@
 """
 Homologación POLLO → JSON estándar (datos_homologar.md).
 
-Parseo puro, sin I/O. El envío HTTP vive en main.py para no bloquear el socket 9910.
+Parseo puro, sin I/O. El envío HTTP vive en main.py para no bloquear el socket 9911.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # Comandos al equipo (MP-5000 y RELAY001)
 
-Especificación de la casuística para **probar y enviar** comandos por la misma conexión TCP 9910. Este documento **no implementa** el envío. Define ventanas del bus, cola, constructor de tramas, UI y criterios de confirmación.
+Especificación de la casuística para **probar y enviar** comandos por la misma conexión TCP 9911. Este documento **no implementa** el envío. Define ventanas del bus, cola, constructor de tramas, UI y criterios de confirmación.
 
 Fuentes: manual de ventanas TX del bus POLLO, referencia de escritura MP5000/RELAY001, `equivalencia2.md` (INFO / RELAY_DATA) y el seguimiento ya decodificado.
 
@@ -18,7 +18,7 @@ Se necesita:
 4. Un **disparador de ventana** anclado a la última trama RX, no a un reloj absoluto.
 
 ```
-UI constructor ──► cola comandos ──► espera ventana TX ──► TCP 9910 ──► gateway ──► RS485
+UI constructor ──► cola comandos ──► espera ventana TX ──► TCP 9911 ──► gateway ──► RS485
                          ▲
                          └── confirmación = releer INFO / RELAY_DATA / 82A701
 ```

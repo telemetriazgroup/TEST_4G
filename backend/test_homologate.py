@@ -58,7 +58,7 @@ def test_rs_and_header_skipped():
         {
             "direction": "rx",
             "value_type": "tcp_header",
-            "text": "CONNECT 1.2.3.4:1 → 9910",
+            "text": "CONNECT 1.2.3.4:1 → 9911",
         }
     )
     assert hdr["status"] == "skip"

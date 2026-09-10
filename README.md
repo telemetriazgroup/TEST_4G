@@ -1,23 +1,23 @@
-# TEST_4G — Monitor TCP 9910
+# TEST_4G — Monitor TCP 9911
 
-Puente TCP en **9910**, backend MongoDB, frontend tipo monitor serial (string/hex).
+Puente TCP en **9911**, backend MongoDB, frontend tipo monitor serial (string/hex).
 
 ## Arquitectura
 
 ```
-Dispositivo ──TCP:9910──► tcp_bridge ──HTTP──► backend ──► MongoDB
+Dispositivo ──TCP:9911──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │                  │
-                         HTTP:8081            WS + REST
+                         HTTP:8082            WS + REST
                          (send/list)             │
                                                  ▼
-                                    frontend:8089 (superadmin)
-                                    ztrack:8444   (admin / monitor)
+                                    frontend:8090 (superadmin)
+                                    ztrack:8445   (admin / monitor)
 ```
 
 ## Cumple (contexto.md)
 
-1. `port_cleaner` libera el puerto **9910** al arrancar Compose.
-2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9910)`, `listen(10)`.
+1. `port_cleaner` libera el puerto **9911** al arrancar Compose.
+2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9911)`, `listen(10)`.
 3. Cada `accept()` → hilo `handle_client`.
 4. Al arrancar: `POST /api/internal/disconnect_all`.
 5. Flujo: `register_pending` → `recv(4096)` → buffer → líneas (`\r\n`/`\n`/`\r`) → `parse_chunks` → backend.
@@ -32,12 +32,12 @@ docker compose up --build -d
 
 | Servicio   | URL / puerto      |
 |------------|-------------------|
-| Ztrack     | http://localhost:8444 |
-| Superadmin | http://localhost:8089 |
-| Backend    | http://localhost:9081 |
-| Bridge HTTP| http://localhost:8081 |
-| TCP equipos| `host:9910`       |
-| MongoDB    | localhost:29017   |
+| Ztrack     | http://localhost:8445 |
+| Superadmin | http://localhost:8090 |
+| Backend    | http://localhost:9082 |
+| Bridge HTTP| http://localhost:8082 |
+| TCP equipos| `host:9911`       |
+| MongoDB    | localhost:29018   |
 
 ### Persistencia (MongoDB `test_4g`)
 
@@ -49,17 +49,17 @@ docker compose up --build -d
 
 ```bash
 # Sesiones por IP
-curl 'http://localhost:9081/api/sessions?ip=1.2.3.4'
+curl 'http://localhost:9082/api/sessions?ip=1.2.3.4'
 # Mensajes de una IP
-curl 'http://localhost:9081/api/messages?ip=1.2.3.4&limit=100'
+curl 'http://localhost:9082/api/messages?ip=1.2.3.4&limit=100'
 # Histórico
-curl 'http://localhost:9081/api/history?ip=1.2.3.4'
+curl 'http://localhost:9082/api/history?ip=1.2.3.4'
 ```
 
 ## Uso del monitor
 
-1. Abre http://localhost:8089
-2. Los equipos que abran TCP a `:9910` aparecen en la lista (solo conexiones reales).
+1. Abre http://localhost:8090
+2. Los equipos que abran TCP a `:9911` aparecen en la lista (solo conexiones reales).
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.
 
@@ -67,15 +67,15 @@ curl 'http://localhost:9081/api/history?ip=1.2.3.4'
 
 ```bash
 # Dispositivos vivos
-curl http://localhost:8081/devices
+curl http://localhost:8082/devices
 
 # Enviar string
-curl -X POST http://localhost:9081/api/send \
+curl -X POST http://localhost:9082/api/send \
   -H 'Content-Type: application/json' \
   -d '{"ip":"1.2.3.4","message":"AT\r\n","encoding":"string"}'
 
 # Enviar hex
-curl -X POST http://localhost:9081/api/send \
+curl -X POST http://localhost:9082/api/send \
   -H 'Content-Type: application/json' \
   -d '{"addr":"1.2.3.4:54321","message":"48656C6C6F","encoding":"hex"}'
 ```

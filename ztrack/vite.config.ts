@@ -12,17 +12,17 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0',
-    port: parseInt(process.env.PORT || '8444'),
+    port: parseInt(process.env.PORT || '8445'),
     strictPort: true,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_PROXY || 'http://127.0.0.1:9081',
+        target: process.env.VITE_API_PROXY || 'http://127.0.0.1:9082',
         changeOrigin: true,
       },
     },
   },
   preview: {
     host: '0.0.0.0',
-    port: parseInt(process.env.PORT || '8444'),
+    port: parseInt(process.env.PORT || '8445'),
   },
 })

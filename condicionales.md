@@ -24,7 +24,7 @@ UI reglas ──► programa (lista IF/ELSE/FIN) ──► un solo rs PANTALLA_C
               cola comandos (kind=pantalla_cmd)
                       │
                       ▼
-         ventana V1/V2 ──► TCP 9910 ──► gateway ──► RS485 PANTALLA
+         ventana V1/V2 ──► TCP 9911 ──► gateway ──► RS485 PANTALLA
 ```
 
 | Módulo | Quién decide | Qué se envía | Persistencia en equipo |

@@ -6,13 +6,13 @@ services:
       - ./port_cleaner/clean.sh:/clean.sh:ro
     entrypoint: ["/bin/sh", "/clean.sh"]
     environment:
-      CLEAN_PORT: "9910"
+      CLEAN_PORT: "9911"
     restart: "no"
 
   mongo:
     image: mongo:7
     ports:
-      - "29017:27017"
+      - "29018:27017"
     volumes:
       - mongo_data:/data/db
     restart: unless-stopped
@@ -20,11 +20,11 @@ services:
   backend:
     build: ./backend
     ports:
-      - "9081:9081"
+      - "9082:9082"
     environment:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: test_4g
-      BRIDGE_URL: http://tcp_bridge:8081
+      BRIDGE_URL: http://tcp_bridge:8082
       HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
       HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
       HOMOLOGATE_TIMEOUT_S: ${HOMOLOGATE_TIMEOUT_S:-5}
@@ -40,12 +40,12 @@ services:
   tcp_bridge:
     build: ./tcp_bridge
     ports:
-      - "9910:9910"
-      - "8081:8081"
+      - "9911:9911"
+      - "8082:8082"
     environment:
-      TCP_PORT: "9910"
-      HTTP_PORT: "8081"
-      BACKEND_URL: http://backend:9081
+      TCP_PORT: "9911"
+      HTTP_PORT: "8082"
+      BACKEND_URL: http://backend:9082
       IDLE_TIMEOUT_S: "300"
       ORPHAN_SWEEP_S: "30"
       FORWARD_LEGACY: "0"
@@ -59,7 +59,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8089:8089"
+      - "8090:8090"
     depends_on:
       - backend
     restart: unless-stopped
@@ -70,9 +70,9 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ""
-        VITE_SERIAL_URL: http://localhost:8089
+        VITE_SERIAL_URL: http://localhost:8090
     ports:
-      - "8444:8444"
+      - "8445:8445"
     depends_on:
       - backend
     restart: unless-stopped
