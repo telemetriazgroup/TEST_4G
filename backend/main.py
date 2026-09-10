@@ -33,7 +33,7 @@ import homologate as homo
 import reglas as regl
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
-MONGO_DB = os.getenv("MONGO_DB", "test_4g")
+MONGO_DB = os.getenv("MONGO_DB", "test_4g_9911")
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://tcp_bridge:8082").rstrip("/")
 
 app = FastAPI(title="TEST_4G Backend", version="1.1.0")
@@ -1310,6 +1310,7 @@ async def health():
     sessions = await db.sessions.count_documents({"is_active": True})
     return {
         "ok": True,
+        "db": MONGO_DB,
         "messages": msgs,
         "active_sessions": sessions,
         "homologate": {
@@ -1723,14 +1724,6 @@ async def _unit_context(ident: str) -> tuple[dict[str, Any], bool, dict[str, Any
         ip = ip or row.get("ip")
         addr = addr or row.get("addr")
     online, sess = await _is_online(addr, ip, None)
-    if not online:
-        dev = await db.devices.find_one({"is_connected": True})
-        if dev:
-            return latest, True, {
-                "session_id": dev.get("session_id"),
-                "ip": dev.get("ip"),
-                "addr": dev.get("addr"),
-            }
     if sess and addr:
         sess = {**sess, "addr": sess.get("addr") or addr, "ip": sess.get("ip") or ip}
     return latest, online, sess
@@ -1911,21 +1904,22 @@ async def homologate_queue_clear():
 @app.get("/api/devices")
 async def get_devices(connected_only: bool = True):
     bridge_devices = []
+    bridge_ok = False
     try:
         async with httpx.AsyncClient(timeout=3.0) as http:
             r = await http.get(f"{BRIDGE_URL}/devices")
             if r.status_code == 200:
+                bridge_ok = True
                 bridge_devices = r.json().get("devices", [])
     except Exception:
         pass
 
-    if bridge_devices:
+    if bridge_ok:
         live_addrs = {d["addr"] for d in bridge_devices}
         await db.devices.update_many(
             {"addr": {"$nin": list(live_addrs)}, "is_connected": True},
             {"$set": {"is_connected": False, "disconnected_at": _now(), "orphan": True}},
         )
-        # Enriquecer con session_id desde Mongo
         for d in bridge_devices:
             sess = await db.sessions.find_one(
                 {"ip": d.get("ip"), "is_active": True},
@@ -1937,8 +1931,10 @@ async def get_devices(connected_only: bool = True):
                 d["tx_count"] = sess.get("tx_count", 0)
         return {"devices": bridge_devices, "source": "bridge"}
 
-    q: dict[str, Any] = {"is_connected": True} if connected_only else {}
-    cursor = db.devices.find(q, {"_id": 0}).sort("last_seen", -1)
+    if connected_only:
+        return {"devices": [], "source": "bridge_unavailable"}
+
+    cursor = db.devices.find({}, {"_id": 0}).sort("last_seen", -1)
     devices = await cursor.to_list(500)
     return {"devices": devices, "source": "mongo"}
 

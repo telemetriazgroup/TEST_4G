@@ -687,14 +687,21 @@
     els.sendHint.textContent = "Actualizando serial…";
     try {
       await loadDevices();
-      const q = selected
-        ? `addr=${encodeURIComponent(selected.addr)}&limit=${LIVE_MAX}`
-        : `limit=${LIVE_MAX}`;
+      if (!selected || !selected.session_id) {
+        live = selected ? live.filter((m) => m.addr === selected.addr) : live;
+        if (!selected) live = [];
+        renderSerial();
+        els.sendHint.textContent = selected
+          ? `Serial · ${selected.addr} · solo tramas de esta conexión`
+          : "Serial en vivo — vacío hasta que entre una sesión nueva";
+        return;
+      }
+      const q = `session_id=${encodeURIComponent(selected.session_id)}&limit=${LIVE_MAX}`;
       const r = await fetch(`${API}/api/messages?${q}`);
       const data = await r.json();
       live = (data.messages || []).slice(-LIVE_MAX);
       renderSerial();
-      els.sendHint.textContent = `Serial · últimas ${liveRows().length} tramas (máx ${LIVE_MAX})`;
+      els.sendHint.textContent = `Serial · sesión actual · ${liveRows().length} tramas (máx ${LIVE_MAX})`;
     } catch (e) {
       els.sendHint.textContent = String(e);
     }
@@ -1307,7 +1314,7 @@
 
     const all = document.createElement("li");
     all.className = selected ? "" : "active";
-    all.innerHTML = `<div class="ip">Todos</div><div class="meta">Ver todos (serial limitado a 100)</div>`;
+    all.innerHTML = `<div class="ip">Todos</div><div class="meta">Solo sesión en vivo (máx ${LIVE_MAX})</div>`;
     all.addEventListener("click", () => selectDevice(null));
     els.deviceList.appendChild(all);
 

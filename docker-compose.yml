@@ -14,7 +14,7 @@ services:
     ports:
       - "29018:27017"
     volumes:
-      - mongo_data:/data/db
+      - mongo_data_9911:/data/db
     restart: unless-stopped
 
   backend:
@@ -23,7 +23,7 @@ services:
       - "9082:9082"
     environment:
       MONGO_URL: mongodb://mongo:27017
-      MONGO_DB: test_4g
+      MONGO_DB: test_4g_9911
       BRIDGE_URL: http://tcp_bridge:8082
       HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
       HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
@@ -78,4 +78,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mongo_data:
+  mongo_data_9911:

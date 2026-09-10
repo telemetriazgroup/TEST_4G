@@ -39,7 +39,9 @@ docker compose up --build -d
 | TCP equipos| `host:9911`       |
 | MongoDB    | localhost:29018   |
 
-### Persistencia (MongoDB `test_4g`)
+### Persistencia (MongoDB `test_4g_9911`)
+
+Base y volumen propios de este stack (`mongo_data_9911`). No reutiliza `test_4g` / `mongo_data` del puerto 9910.
 
 | Colección | Contenido |
 |-----------|-----------|
