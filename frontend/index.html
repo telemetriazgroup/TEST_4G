@@ -243,6 +243,14 @@
           <input type="date" id="statusDate" aria-label="Fecha" />
           <button type="button" id="btnStatusNext" class="btn ghost" title="Día siguiente">▶</button>
         </div>
+        <div class="filters">
+          <select id="statusKind" aria-label="Tipo">
+            <option value="all" selected>Todos</option>
+            <option value="info">INFO (pantalla)</option>
+            <option value="relay">RELAY (control)</option>
+            <option value="mp5000">MP-5000</option>
+          </select>
+        </div>
         <button type="button" id="btnRefreshStatus" class="btn primary">Cargar día</button>
       </div>
       <div class="archive-layout">
@@ -250,12 +258,19 @@
           <div class="day-list-head">Días con seguimiento</div>
           <ul id="statusDayList" class="day-list"></ul>
           <p id="emptyStatusDays" class="empty show">Sin días decodificados aún.</p>
+          <details class="relay-names" id="relayNamesBox">
+            <summary>Nombres de relé</summary>
+            <p class="hint">Predeterminado «libre». Editables por cámara.</p>
+            <div id="relayNamesForm"></div>
+            <button type="button" id="btnSaveRelayNames" class="btn primary">Guardar nombres</button>
+            <p id="relayNamesHint" class="hint">—</p>
+          </details>
         </aside>
         <div class="archive-content">
           <div id="statusKpis" class="status-kpis"></div>
           <div id="statusHours" class="hours-wrap"></div>
-          <p id="emptyStatus" class="empty show">Cuando llegue una trama decodificable (d01–d05) se guarda aquí. El POST al link corre aparte.</p>
-          <p id="statusMeta" class="hint">Tabla seguimiento · consulta por fecha (zona Lima)</p>
+          <p id="emptyStatus" class="empty show">INFO, RELAY y MP-5000 se guardan como JSON aparte al llegar la trama. Consulta por fecha.</p>
+          <p id="statusMeta" class="hint">Tabla seguimiento · INFO pantalla · RELAY control · MP-5000 equipo</p>
         </div>
       </div>
     </section>

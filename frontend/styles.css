@@ -551,6 +551,45 @@ body {
   overflow: auto;
 }
 .status-hist { margin-top: 0.75rem; font-size: 0.78rem; color: var(--muted); }
+
+.kind-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #e8eef3;
+}
+.kind-badge.kind-info { background: #dbeafe; color: #1e3a8a; }
+.kind-badge.kind-relay { background: #fef3c7; color: #92400e; }
+.kind-badge.kind-mp5000 { background: #d1fae5; color: #065f46; }
+
+.relay-names {
+  margin: 0.6rem 0.5rem 0.75rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.75rem;
+}
+.relay-names summary { cursor: pointer; font-weight: 700; }
+.relay-name-row {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0.28rem 0;
+}
+.relay-name-row input {
+  width: 100%;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.relay-on { color: #065f46; font-weight: 700; }
+.relay-off { color: var(--muted); }
 .type-tcp_header { background: #e4e4e4; color: #333; }
 
 .term .type-badge {

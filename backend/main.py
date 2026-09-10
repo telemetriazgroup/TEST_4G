@@ -26,6 +26,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
 import homologate as homo
+import decode_rs
 import decode_tk
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
@@ -90,6 +91,11 @@ class ConnectBody(BaseModel):
     imei: str | None = None
     tcp_header: dict[str, Any] | None = None
     session_id: str | None = None
+
+
+class RelayLabelsBody(BaseModel):
+    ident: str
+    names: dict[str, str] = Field(default_factory=dict)
 
 
 class HomologateEnqueueBody(BaseModel):
@@ -263,9 +269,15 @@ async def startup() -> None:
     await db.homologate_queue.create_index([("status", 1), ("enqueued_at", 1)])
     await db.seguimiento.create_index([("date", 1), ("ts", -1)])
     await db.seguimiento.create_index([("hour", 1), ("ts", -1)])
+    await db.seguimiento.create_index([("kind", 1), ("date", 1), ("ts", -1)])
     await db.seguimiento.create_index([("i", 1), ("date", 1), ("ts", -1)])
     await db.seguimiento.create_index([("ip", 1), ("date", 1), ("ts", -1)])
-    await db.seguimiento.create_index([("message_id", 1)], unique=True, sparse=True)
+    try:
+        await db.seguimiento.drop_index("message_id_1")
+    except Exception:
+        pass
+    await db.seguimiento.create_index([("message_id", 1), ("kind", 1)], unique=True, sparse=True)
+    await db.relay_labels.create_index("ident", unique=True)
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
@@ -600,8 +612,9 @@ def _looks_decodable(doc: dict[str, Any]) -> bool:
         return False
     if (doc.get("value_type") or "") == "tcp_header":
         return False
-    text = str(doc.get("text") or "").upper()
-    return "82A7" in text or '"D0' in text
+    text = str(doc.get("text") or "")
+    upper = text.upper()
+    return "82A7" in upper or '"D0' in upper or decode_rs.looks_rs_text(text)
 
 
 def _decode_job_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
@@ -625,55 +638,108 @@ def _enqueue_seguimiento(doc: dict[str, Any]) -> None:
     _decode_wake.set()
 
 
-async def _save_seguimiento(job: dict[str, Any], *, notify: bool = True) -> dict[str, Any] | None:
-    mid = job.get("message_id")
-    if mid:
-        exists = await db.seguimiento.find_one({"message_id": mid}, {"_id": 1})
-        if exists:
-            return None
-    decoded = decode_tk.decode_unit_status(job.get("text") or "", ts=job.get("ts"))
-    if not decoded:
-        return None
+async def _relay_names_for(ident: str | None) -> dict[int, str]:
+    if not ident:
+        return dict(decode_rs.DEFAULT_RELAY_NAMES)
+    doc = await db.relay_labels.find_one({"ident": ident}, {"_id": 0, "names": 1})
+    return decode_rs.merge_relay_names((doc or {}).get("names"))
+
+
+def _decode_tracking(text: str, *, ts: str | None, relay_names: dict[Any, Any] | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    unit = decode_tk.decode_unit_status(text, ts=ts)
+    if unit:
+        unit["kind"] = "mp5000"
+        rows.append(unit)
+    rows.extend(decode_rs.decode_rs_text(text, relay_names=relay_names, ts=ts))
+    return rows
+
+
+def _row_from_decoded(job: dict[str, Any], decoded: dict[str, Any]) -> dict[str, Any]:
     ts = job.get("ts") or decoded.get("ts")
-    row = _sanitize_for_mongo(
-        {
-            "ts": ts,
-            "decoded_at": _now(),
-            "date": homo.date_key(ts),
-            "hour": homo.hour_key(ts),
-            "i": decoded.get("i"),
-            "container_id": (decoded.get("snapshot") or {}).get("container_id"),
-            "addr": job.get("addr"),
-            "ip": job.get("ip"),
-            "session_id": job.get("session_id"),
-            "message_id": mid,
-            "opcodes": decoded.get("opcodes") or [],
-            "crc_all_ok": decoded.get("crc_all_ok"),
-            "snapshot": decoded.get("snapshot"),
-            "sensors": decoded.get("sensors"),
-            "control": decoded.get("control"),
-            "io": decoded.get("io"),
-            "caption": decoded.get("caption"),
-            "alarms": decoded.get("alarms"),
-        }
-    )
-    try:
-        await db.seguimiento.insert_one(row)
-    except Exception as e:
-        if "E11000" in str(e) or "duplicate" in str(e).lower():
-            return None
-        raise
-    if mid:
+    kind = decoded.get("kind") or "mp5000"
+    snap = decoded.get("snapshot") or {}
+    row: dict[str, Any] = {
+        "ts": ts,
+        "decoded_at": _now(),
+        "date": homo.date_key(ts),
+        "hour": homo.hour_key(ts),
+        "kind": kind,
+        "source": decoded.get("source") or kind,
+        "i": decoded.get("i"),
+        "addr": job.get("addr"),
+        "ip": job.get("ip"),
+        "session_id": job.get("session_id"),
+        "message_id": job.get("message_id"),
+        "snapshot": snap,
+    }
+    if kind == "mp5000":
+        row.update(
+            {
+                "container_id": snap.get("container_id"),
+                "opcodes": decoded.get("opcodes") or [],
+                "crc_all_ok": decoded.get("crc_all_ok"),
+                "sensors": decoded.get("sensors"),
+                "control": decoded.get("control"),
+                "io": decoded.get("io"),
+                "caption": decoded.get("caption"),
+                "alarms": decoded.get("alarms"),
+            }
+        )
+    elif kind == "info":
+        row.update({"screen": decoded.get("screen"), "field_count": decoded.get("field_count")})
+    elif kind == "relay":
+        row.update(
+            {
+                "node": decoded.get("node"),
+                "relays": decoded.get("relays"),
+                "analogs": decoded.get("analogs"),
+                "humidity_pct": decoded.get("humidity_pct"),
+                "humidity_setpoint_pct": decoded.get("humidity_setpoint_pct"),
+            }
+        )
+    return _sanitize_for_mongo(row)
+
+
+async def _save_seguimiento(job: dict[str, Any], *, notify: bool = True) -> dict[str, Any] | None:
+    text = job.get("text") or ""
+    ident = None
+    objs = homo.split_json_objects(text)
+    if objs:
+        ident = str(objs[0].get("i") or "") or None
+    names = await _relay_names_for(ident)
+    decoded_rows = _decode_tracking(text, ts=job.get("ts"), relay_names=names)
+    if not decoded_rows:
+        return None
+    mid = job.get("message_id")
+    last = None
+    saved = 0
+    for decoded in decoded_rows:
+        kind = decoded.get("kind") or "mp5000"
+        if mid:
+            exists = await db.seguimiento.find_one({"message_id": mid, "kind": kind}, {"_id": 1})
+            if exists:
+                continue
+        row = _row_from_decoded(job, decoded)
+        try:
+            await db.seguimiento.insert_one(row)
+        except Exception as e:
+            if "E11000" in str(e) or "duplicate" in str(e).lower():
+                continue
+            raise
+        last = row
+        saved += 1
+        if notify:
+            await broadcast({"type": "seguimiento", **_jsonable(row)})
+    if mid and saved:
         try:
             await db.messages.update_one(
                 {"_id": ObjectId(mid)},
-                {"$set": {"seguimiento": True, "seguimiento_date": row["date"]}},
+                {"$set": {"seguimiento": True, "seguimiento_date": last.get("date") if last else None}},
             )
         except Exception:
             log.exception("no se pudo marcar mensaje seguimiento")
-    if notify:
-        await broadcast({"type": "seguimiento", **_jsonable(row)})
-    return row
+    return last
 
 
 async def _seguimiento_worker() -> None:
@@ -1050,6 +1116,7 @@ def _seguimiento_query(
     ip: str | None = None,
     date: str | None = None,
     hour: str | None = None,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     q: dict[str, Any] = {}
     if ident:
@@ -1060,6 +1127,8 @@ def _seguimiento_query(
         q["hour"] = hour
     elif date:
         q["date"] = date
+    if kind and kind != "all":
+        q["kind"] = kind
     return q
 
 
@@ -1084,24 +1153,56 @@ async def list_seguimiento(
     hour: str | None = None,
     ident: str | None = None,
     ip: str | None = None,
+    kind: str | None = None,
     limit: int = 500,
 ):
-    q = _seguimiento_query(ident=ident, ip=ip, date=date, hour=hour)
+    q = _seguimiento_query(ident=ident, ip=ip, date=date, hour=hour, kind=kind)
     limit = max(1, min(limit, 2000))
     cursor = db.seguimiento.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
     rows = await cursor.to_list(limit)
     hours: dict[str, int] = {}
+    latest_by_kind: dict[str, Any] = {}
     for r in rows:
         hk = r.get("hour") or "desconocida"
         hours[hk] = hours.get(hk, 0) + 1
+        k = r.get("kind") or "mp5000"
+        latest_by_kind.setdefault(k, r)
     return {
         "date": date,
         "hour": hour,
+        "kind": kind,
         "latest": rows[0] if rows else None,
+        "latest_by_kind": latest_by_kind,
         "items": rows,
         "hours": [{"hour": k, "count": hours[k]} for k in sorted(hours.keys(), reverse=True)],
         "count": len(rows),
     }
+
+
+@app.get("/api/relay-labels")
+async def get_relay_labels(ident: str = "POLLO_BEBE"):
+    names = await _relay_names_for(ident)
+    stored = await db.relay_labels.find_one({"ident": ident}, {"_id": 0})
+    return {
+        "ident": ident,
+        "names": {str(k): names[k] for k in range(1, 11)},
+        "defaults": {str(k): v for k, v in decode_rs.DEFAULT_RELAY_NAMES.items()},
+        "custom": bool(stored),
+    }
+
+
+@app.put("/api/relay-labels")
+async def put_relay_labels(body: RelayLabelsBody):
+    ident = (body.ident or "").strip()
+    if not ident:
+        raise HTTPException(400, "ident requerido")
+    names = decode_rs.merge_relay_names(body.names)
+    await db.relay_labels.update_one(
+        {"ident": ident},
+        {"$set": {"ident": ident, "names": {str(k): names[k] for k in range(1, 11)}, "updated_at": _now()}},
+        upsert=True,
+    )
+    return await get_relay_labels(ident)
 
 
 @app.get("/api/unit-status")

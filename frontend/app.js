@@ -77,6 +77,10 @@
     btnStatusPrev: document.getElementById("btnStatusPrev"),
     btnStatusNext: document.getElementById("btnStatusNext"),
     btnRefreshStatus: document.getElementById("btnRefreshStatus"),
+    statusKind: document.getElementById("statusKind"),
+    relayNamesForm: document.getElementById("relayNamesForm"),
+    btnSaveRelayNames: document.getElementById("btnSaveRelayNames"),
+    relayNamesHint: document.getElementById("relayNamesHint"),
   };
 
   let selected = null; // { addr, ip, port }
@@ -1304,45 +1308,93 @@
     }
   }
 
-  function renderSeguimientoKpis(latest) {
+  function kindLabel(kind) {
+    if (kind === "info") return "INFO";
+    if (kind === "relay") return "RELAY";
+    return "MP-5000";
+  }
+
+  function renderSeguimientoKpis(latestByKind) {
     if (!els.statusKpis) return;
-    if (!latest) {
+    const by = latestByKind || {};
+    const info = by.info;
+    const relay = by.relay;
+    const unit = by.mp5000;
+    if (!info && !relay && !unit) {
       els.statusKpis.innerHTML = "";
       return;
     }
-    const s = latest.snapshot || {};
-    const mode = s.unit_mode
-      ? `${MODE_ES[s.unit_mode] || s.unit_mode} (${s.unit_mode_id ?? "—"})`
-      : "—";
-    const alarms = s.alarms || [];
-    const alarmTxt = alarms.length
-      ? alarms.map((a) => `#${a.number}${a.acknowledged ? " ack" : ""}`).join(", ")
-      : "ninguna";
-    const io = (latest.io && latest.io.points) || {};
-    const ioOn = Object.entries(io)
-      .filter(([, v]) => v && v.value === true)
-      .map(([k]) => k.replace(/^do_|^di_/, "").replace(/_/g, " "));
-    els.statusKpis.innerHTML =
-      kpiHtml("Contenedor", s.container_id || latest.container_id || "—") +
-      kpiHtml("Modo", mode) +
-      kpiHtml("Setpoint", fmtStatusVal(s.setpoint_c, " °C")) +
-      kpiHtml("Carga", fmtStatusVal(s.capacity_load_pct, " %")) +
-      kpiHtml("Supply", fmtStatusVal(s.supply_air_c, " °C")) +
-      kpiHtml("Return", fmtStatusVal(s.return_air_c, " °C")) +
-      kpiHtml("Ambiente", fmtStatusVal(s.ambient_c, " °C")) +
-      kpiHtml("Humedad", fmtStatusVal(s.humidity_pct, " %")) +
-      kpiHtml("AC", fmtStatusVal(s.ac_connected)) +
-      kpiHtml("Unidad activa", fmtStatusVal(s.unit_active)) +
-      kpiHtml("Alarma", s.alarm_present ? alarmTxt : "no") +
-      kpiHtml("IO ON", ioOn.length ? ioOn.join(", ") : "—") +
-      kpiHtml("CRC", latest.crc_all_ok ? "OK" : "ERROR");
+    let html = "";
+    if (info) {
+      const s = info.snapshot || {};
+      html +=
+        kpiHtml("Pantalla", "INFO") +
+        kpiHtml("Supply (pantalla)", fmtStatusVal(s.supply_air_c, " °C")) +
+        kpiHtml("Return (pantalla)", fmtStatusVal(s.return_air_c, " °C")) +
+        kpiHtml("SP temp", fmtStatusVal(s.setpoint_c, " °C")) +
+        kpiHtml("Humedad", fmtStatusVal(s.humidity_pct, " %")) +
+        kpiHtml("SP humedad", fmtStatusVal(s.humidity_setpoint_pct, " %")) +
+        kpiHtml("CO2", fmtStatusVal(s.co2_pct, " %")) +
+        kpiHtml("SP CO2", fmtStatusVal(s.co2_setpoint_pct, " %"));
+    }
+    if (relay) {
+      const s = relay.snapshot || {};
+      const on = (s.relays_on || []).join(", ") || "ninguno";
+      html +=
+        kpiHtml("Control", relay.source || "RELAY") +
+        kpiHtml("Relés ON", on) +
+        kpiHtml("Humedad (relay)", fmtStatusVal(s.humidity_pct ?? relay.humidity_pct, " %")) +
+        kpiHtml("SP humedad (relay)", fmtStatusVal(s.humidity_setpoint_pct ?? relay.humidity_setpoint_pct, " %")) +
+        kpiHtml("Pot1", fmtStatusVal(s.pot1_v, " V"));
+    }
+    if (unit) {
+      const s = unit.snapshot || {};
+      const mode = s.unit_mode
+        ? `${MODE_ES[s.unit_mode] || s.unit_mode} (${s.unit_mode_id ?? "—"})`
+        : "—";
+      html +=
+        kpiHtml("Equipo", s.container_id || unit.container_id || "MP-5000") +
+        kpiHtml("Modo", mode) +
+        kpiHtml("SP equipo", fmtStatusVal(s.setpoint_c, " °C")) +
+        kpiHtml("Supply equipo", fmtStatusVal(s.supply_air_c, " °C")) +
+        kpiHtml("CRC", unit.crc_all_ok ? "OK" : "ERROR");
+    }
+    els.statusKpis.innerHTML = html;
+  }
+
+  function rowSummary(it) {
+    const kind = it.kind || "mp5000";
+    const s = it.snapshot || {};
+    if (kind === "info") {
+      return {
+        tipo: kind,
+        detalle: `pantalla SP ${fmtStatusVal(s.setpoint_c, "°C")}`,
+        extra: `RH ${fmtStatusVal(s.humidity_pct, "%")} / SP ${fmtStatusVal(s.humidity_setpoint_pct, "%")}`,
+        supply: fmtStatusVal(s.supply_air_c, "°C"),
+      };
+    }
+    if (kind === "relay") {
+      const on = (s.relays_on || []).join(", ") || "ninguno ON";
+      return {
+        tipo: kind,
+        detalle: it.source || "RELAY",
+        extra: on,
+        supply: fmtStatusVal(s.humidity_pct ?? it.humidity_pct, "% RH"),
+      };
+    }
+    return {
+      tipo: kind,
+      detalle: MODE_ES[s.unit_mode] || s.unit_mode || it.container_id || "MP-5000",
+      extra: (s.alarms || []).map((a) => `#${a.number}`).join(", ") || "sin alarma",
+      supply: fmtStatusVal(s.supply_air_c, "°C"),
+    };
   }
 
   function renderSeguimiento(data) {
     const items = (data && data.items) || [];
     const latest = data && data.latest;
     if (els.statusBadge) els.statusBadge.textContent = String(data.count || items.length);
-    renderSeguimientoKpis(latest);
+    renderSeguimientoKpis(data.latest_by_kind || {});
     if (els.emptyStatus) els.emptyStatus.classList.toggle("show", items.length === 0);
     if (!els.statusHours) return;
     els.statusHours.innerHTML = "";
@@ -1364,22 +1416,19 @@
       const table = document.createElement("table");
       table.className = "capture-table";
       table.innerHTML =
-        "<thead><tr><th>Hora</th><th>i</th><th>Contenedor</th><th>Modo</th><th>SP</th><th>Supply</th><th>Alarma</th><th>JSON</th></tr></thead>";
+        "<thead><tr><th>Hora</th><th>Tipo</th><th>i</th><th>Detalle</th><th>Valor</th><th>Extra</th><th>JSON</th></tr></thead>";
       const tbody = document.createElement("tbody");
       for (const it of rows) {
-        const s = it.snapshot || {};
-        const mode = MODE_ES[s.unit_mode] || s.unit_mode || "—";
-        const alarm = (s.alarms || []).map((a) => `#${a.number}`).join(", ") || "—";
+        const sum = rowSummary(it);
         const tr = document.createElement("tr");
         const json = JSON.stringify(it, null, 2);
         tr.innerHTML =
           `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+          `<td><span class="kind-badge kind-${esc(sum.tipo)}">${esc(kindLabel(sum.tipo))}</span></td>` +
           `<td class="mono">${esc(it.i || "—")}</td>` +
-          `<td class="mono">${esc(it.container_id || s.container_id || "—")}</td>` +
-          `<td>${esc(mode)}</td>` +
-          `<td class="mono">${esc(fmtStatusVal(s.setpoint_c, "°C"))}</td>` +
-          `<td class="mono">${esc(fmtStatusVal(s.supply_air_c, "°C"))}</td>` +
-          `<td>${esc(alarm)}</td>` +
+          `<td>${esc(sum.detalle)}</td>` +
+          `<td class="mono">${esc(sum.supply)}</td>` +
+          `<td>${esc(sum.extra)}</td>` +
           `<td class="payload-cell"><details><summary>ver</summary><pre>${esc(json)}</pre></details></td>`;
         tbody.appendChild(tr);
       }
@@ -1390,7 +1439,7 @@
     if (els.statusMeta) {
       const day = statusSelectedDate || data.date || "—";
       els.statusMeta.textContent = latest
-        ? `${day} · ${items.length} registro(s) · último ${formatTs(latest.ts)} · ${latest.i || ""}`
+        ? `${day} · ${items.length} registro(s) · último ${kindLabel(latest.kind)} ${formatTs(latest.ts)}`
         : `${day} · sin registros`;
     }
   }
@@ -1421,6 +1470,7 @@
       p.set("date", statusSelectedDate);
       p.set("limit", "500");
       if (selected && selected.ip) p.set("ip", selected.ip);
+      if (els.statusKind && els.statusKind.value !== "all") p.set("kind", els.statusKind.value);
       const r = await fetch(`${API}/api/seguimiento?${p}`);
       const data = await r.json();
       renderSeguimiento(data);
@@ -1440,7 +1490,60 @@
     loadSeguimiento();
   }
 
+  function currentIdent() {
+    return "POLLO_BEBE";
+  }
+
+  function renderRelayNameInputs(names) {
+    if (!els.relayNamesForm) return;
+    els.relayNamesForm.innerHTML = "";
+    for (let i = 1; i <= 10; i += 1) {
+      const row = document.createElement("label");
+      row.className = "relay-name-row";
+      const key = String(i);
+      row.innerHTML =
+        `<span>R${i}</span><input type="text" data-relay="${key}" value="${esc(names[key] || "libre")}" />`;
+      els.relayNamesForm.appendChild(row);
+    }
+  }
+
+  async function loadRelayNames() {
+    try {
+      const r = await fetch(`${API}/api/relay-labels?ident=${encodeURIComponent(currentIdent())}`);
+      const data = await r.json();
+      renderRelayNameInputs(data.names || {});
+      if (els.relayNamesHint) {
+        els.relayNamesHint.textContent = data.custom ? `Nombres de ${data.ident}` : "Usando nombres predefinidos";
+      }
+    } catch (e) {
+      if (els.relayNamesHint) els.relayNamesHint.textContent = String(e);
+    }
+  }
+
+  async function saveRelayNames() {
+    if (!els.relayNamesForm) return;
+    const names = {};
+    els.relayNamesForm.querySelectorAll("input[data-relay]").forEach((inp) => {
+      names[inp.dataset.relay] = inp.value.trim() || "libre";
+    });
+    try {
+      const r = await fetch(`${API}/api/relay-labels`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ident: currentIdent(), names }),
+      });
+      const data = await r.json();
+      renderRelayNameInputs(data.names || names);
+      if (els.relayNamesHint) els.relayNamesHint.textContent = "Nombres guardados. Las próximas tramas RELAY los usan.";
+    } catch (e) {
+      if (els.relayNamesHint) els.relayNamesHint.textContent = String(e);
+    }
+  }
+
   if (els.btnRefreshStatus) els.btnRefreshStatus.addEventListener("click", loadSeguimiento);
+  if (els.statusKind) els.statusKind.addEventListener("change", loadSeguimiento);
+  if (els.btnSaveRelayNames) els.btnSaveRelayNames.addEventListener("click", saveRelayNames);
+  loadRelayNames();
   if (els.statusDate) {
     els.statusDate.addEventListener("change", () => {
       if (els.statusDate.value) selectStatusDay(els.statusDate.value);
