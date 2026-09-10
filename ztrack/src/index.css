@@ -1,0 +1,183 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Design tokens (light) ────────────────────────────────────────────────── */
+:root {
+  --bg:            #F5F5F7;
+  --surface:       #FFFFFF;
+  --input-surface: #FFFFFF;
+  --text:          #1D1D1F;
+  --text-2:        #6E6E73;
+  --sep:           #D2D2D7;
+  --accent:        #0071E3;
+  --c-green:       #34C759;
+  --c-amber:       #FF9F0A;
+  --c-red:         #FF3B30;
+  --c-gray:        #8E8E93;
+  --surface-blur:  rgba(245, 245, 247, 0.85);
+  --nav-pill:      #E5E5EA;
+  --shadow:        0 1px 3px rgba(0, 0, 0, 0.06);
+  --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.08);
+  --gauge-track:   #E8E8ED;
+}
+
+/* ── Dark mode (media query) ─────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg:            #000000;
+    --surface:       #1C1C1E;
+    --input-surface: #2C2C2E;
+    --text:          #F5F5F7;
+    --text-2:        #98989D;
+    --sep:           #38383A;
+    --surface-blur:  rgba(28, 28, 30, 0.88);
+    --nav-pill:      #2C2C2E;
+    --shadow:        0 1px 3px rgba(0, 0, 0, 0.32);
+    --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.55);
+    --gauge-track:   #3A3A3C;
+  }
+}
+
+/* ── Dark mode (forced) ──────────────────────────────────────────────────── */
+[data-theme='dark'] {
+  --bg:            #000000;
+  --surface:       #1C1C1E;
+  --input-surface: #2C2C2E;
+  --text:          #F5F5F7;
+  --text-2:        #98989D;
+  --sep:           #38383A;
+  --surface-blur:  rgba(28, 28, 30, 0.88);
+  --nav-pill:      #2C2C2E;
+  --shadow:        0 1px 3px rgba(0, 0, 0, 0.32);
+  --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.55);
+  --gauge-track:   #3A3A3C;
+}
+
+/* ── Light mode (forced) ─────────────────────────────────────────────────── */
+[data-theme='light'] {
+  --bg:            #F5F5F7;
+  --surface:       #FFFFFF;
+  --input-surface: #FFFFFF;
+  --text:          #1D1D1F;
+  --text-2:        #6E6E73;
+  --sep:           #D2D2D7;
+  --surface-blur:  rgba(245, 245, 247, 0.85);
+  --nav-pill:      #E5E5EA;
+  --shadow:        0 1px 3px rgba(0, 0, 0, 0.06);
+  --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Utility: hide scrollbar while keeping scroll ───────────────────────── */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Transitions ─────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fade-in 0.22s ease-out both;
+}
+
+/* ── Login card: gets white bg + radius + shadow only on md+ ─────────────── */
+@media (min-width: 768px) {
+  .login-card {
+    background-color: var(--surface);
+    border-radius: 18px;
+    padding: 40px;
+    box-shadow: var(--card-shadow);
+  }
+}
+
+/* ── Input field height: taller on mobile ────────────────────────────────── */
+.field-h {
+  height: 46px;
+}
+
+@media (max-width: 767px) {
+  .field-h {
+    height: 52px;
+  }
+}
+
+/* ── Placeholder colour respects theme ───────────────────────────────────── */
+input::placeholder {
+  color: var(--text-2);
+  opacity: 1;
+}
+
+/* ── Range slider ─────────────────────────────────────────────────────────── */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--gauge-track);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+input[type='range']::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* Larger touch target on mobile for sliders */
+@media (max-width: 767px) {
+  .slider-touch {
+    padding: 14px 0;
+  }
+}
+
+/* ── Confirm bar: sits above tab bar on mobile ───────────────────────────── */
+.confirm-bar {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 49px);
+}
+@media (min-width: 768px) {
+  .confirm-bar {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* ── Stale data: subtle diagonal stripe overlay ──────────────────────────── */
+.stale-pattern {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 9px,
+    rgba(128, 128, 128, 0.06) 9px,
+    rgba(128, 128, 128, 0.06) 18px
+  );
+}

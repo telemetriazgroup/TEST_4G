@@ -10,7 +10,8 @@ Dispositivo ──TCP:9910──► tcp_bridge ──HTTP──► backend ─�
                          HTTP:8081            WS + REST
                          (send/list)             │
                                                  ▼
-                                           frontend:8089
+                                    frontend:8089 (superadmin)
+                                    ztrack:8444   (admin / monitor)
 ```
 
 ## Cumple (contexto.md)
@@ -31,7 +32,8 @@ docker compose up --build -d
 
 | Servicio   | URL / puerto      |
 |------------|-------------------|
-| Frontend   | http://localhost:8089 |
+| Ztrack     | http://localhost:8444 |
+| Superadmin | http://localhost:8089 |
 | Backend    | http://localhost:9081 |
 | Bridge HTTP| http://localhost:8081 |
 | TCP equipos| `host:9910`       |
