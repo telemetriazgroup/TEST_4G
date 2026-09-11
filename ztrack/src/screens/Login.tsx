@@ -105,7 +105,7 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
 
   const finishLogin = (session: LocalSession) => {
     if (session.role === 'superadmin') {
-      window.location.href = (import.meta.env.VITE_SERIAL_URL as string) || 'http://localhost:8090'
+      window.location.href = (import.meta.env.VITE_SERIAL_URL as string) || 'http://localhost:8091'
       return
     }
     onLogin(session, remember)
@@ -389,7 +389,7 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
           className="hidden md:block mt-8 text-center"
           style={{ fontSize: '12px', color: 'var(--text-2)', letterSpacing: '0.01em' }}
         >
-          admin / admin · monitor / monitor · superadmin → serial :8090
+          admin / admin · monitor / monitor · superadmin → serial :8091
         </p>
       </div>
 
@@ -424,7 +424,7 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
           className="text-center mt-4"
           style={{ fontSize: '12px', color: 'var(--text-2)', letterSpacing: '0.01em' }}
         >
-          admin / admin · monitor / monitor · superadmin → serial :8090
+          admin / admin · monitor / monitor · superadmin → serial :8091
         </p>
       </div>
     </div>

@@ -30,7 +30,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g` |
 | Volumen | `mongo_data` (Compose lo nombra `test_4g_pollo_mongo_data`) |
 
-### `test-saasa` — TCP 9911 (esta rama)
+### `test-saasa` — TCP 9911
 
 | Recurso | Valor |
 |---------|--------|
@@ -44,7 +44,21 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9911` |
 | Volumen | `mongo_data_9911` (Compose lo nombra `test_4g_saasa_mongo_data_9911`) |
 
-El dispositivo pollo apunta a **9910**. El de saasa apunta a **9911**. Las URLs de UI no se mezclan.
+### `test-carne` — TCP 9912 (esta rama)
+
+| Recurso | Valor |
+|---------|--------|
+| Proyecto Compose | `test_4g_carne` |
+| TCP dispositivo | **9912** |
+| Bridge HTTP | 8083 |
+| Backend | 9083 |
+| Superadmin serial | 8091 |
+| Ztrack | 8446 |
+| Mongo host | 29019 → 27017 |
+| Base Mongo | `test_4g_9912` |
+| Volumen | `mongo_data_9912` (Compose lo nombra `test_4g_carne_mongo_data_9912`) |
+
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. Las URLs no se mezclan.
 
 En `test-saasa` el `docker-compose.yml` ya lleva `name: test_4g_saasa`. En `test_pollo` hay que poner `name: test_4g_pollo` (si esa rama aún no lo tiene, los contenedores se llaman `test_4g-*` y chocan con cualquier otra carpeta también llamada `TEST_4G`).
 

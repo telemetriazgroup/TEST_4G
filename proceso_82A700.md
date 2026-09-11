@@ -244,7 +244,7 @@ Funciones mínimas:
 | `decode_fp(raw, exp) -> {value, status, raw}` | Códigos ≥ `0x7FF0` |
 | `decode_82a700(hex) -> dict` | Orquestador |
 
-Dónde engancharlo (fase 2, no bloquea 9911):
+Dónde engancharlo (fase 2, no bloquea 9912):
 
 ```
 telemetry persistida

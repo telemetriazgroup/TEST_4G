@@ -1,4 +1,4 @@
-name: test_4g_saasa
+name: test_4g_carne
 
 services:
   port_cleaner:
@@ -8,25 +8,25 @@ services:
       - ./port_cleaner/clean.sh:/clean.sh:ro
     entrypoint: ["/bin/sh", "/clean.sh"]
     environment:
-      CLEAN_PORT: "9911"
+      CLEAN_PORT: "9912"
     restart: "no"
 
   mongo:
     image: mongo:7
     ports:
-      - "29018:27017"
+      - "29019:27017"
     volumes:
-      - mongo_data_9911:/data/db
+      - mongo_data_9912:/data/db
     restart: unless-stopped
 
   backend:
     build: ./backend
     ports:
-      - "9082:9082"
+      - "9083:9083"
     environment:
       MONGO_URL: mongodb://mongo:27017
-      MONGO_DB: test_4g_9911
-      BRIDGE_URL: http://tcp_bridge:8082
+      MONGO_DB: test_4g_9912
+      BRIDGE_URL: http://tcp_bridge:8083
       HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
       HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
       HOMOLOGATE_TIMEOUT_S: ${HOMOLOGATE_TIMEOUT_S:-5}
@@ -42,12 +42,12 @@ services:
   tcp_bridge:
     build: ./tcp_bridge
     ports:
-      - "9911:9911"
-      - "8082:8082"
+      - "9912:9912"
+      - "8083:8083"
     environment:
-      TCP_PORT: "9911"
-      HTTP_PORT: "8082"
-      BACKEND_URL: http://backend:9082
+      TCP_PORT: "9912"
+      HTTP_PORT: "8083"
+      BACKEND_URL: http://backend:9083
       IDLE_TIMEOUT_S: "300"
       ORPHAN_SWEEP_S: "30"
       FORWARD_LEGACY: "0"
@@ -61,7 +61,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8090:8090"
+      - "8091:8091"
     depends_on:
       - backend
     restart: unless-stopped
@@ -72,12 +72,12 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ""
-        VITE_SERIAL_URL: http://localhost:8090
+        VITE_SERIAL_URL: http://localhost:8091
     ports:
-      - "8445:8445"
+      - "8446:8446"
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
-  mongo_data_9911:
+  mongo_data_9912:

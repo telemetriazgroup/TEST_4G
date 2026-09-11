@@ -3,7 +3,7 @@
   const API = (meta && meta.content) || location.origin;
   const LIVE_MAX = 100;
   const SESSION_KEY = "ztrack_session";
-  const ZTRACK_URL = `${location.protocol}//${location.hostname}:8445`;
+  const ZTRACK_URL = `${location.protocol}//${location.hostname}:8446`;
 
   function readSession() {
     try {

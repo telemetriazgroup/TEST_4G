@@ -47,7 +47,7 @@ export type Session = {
 };
 
 const API = import.meta.env.VITE_API_URL ?? "";
-export const SERIAL_URL = import.meta.env.VITE_SERIAL_URL || "http://localhost:8090";
+export const SERIAL_URL = import.meta.env.VITE_SERIAL_URL || "http://localhost:8091";
 
 export async function clientLogin(username: string, password: string): Promise<Session> {
   const r = await fetch(`${API}/api/client/login`, {

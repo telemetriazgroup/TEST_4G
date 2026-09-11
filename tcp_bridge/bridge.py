@@ -1,5 +1,5 @@
 """
-tcp_bridge — servidor TCP puerto 9911.
+tcp_bridge — servidor TCP puerto 9912.
 
 Flujo:
   accept() → register_pending(addr, conn) → recv(4096) → buffer → líneas
@@ -31,9 +31,9 @@ from flask import Flask, jsonify, request
 # ---------------------------------------------------------------------------
 
 HOST = os.getenv("TCP_HOST", "0.0.0.0")
-TCP_PORT = int(os.getenv("TCP_PORT", "9911"))
-HTTP_PORT = int(os.getenv("HTTP_PORT", "8082"))
-BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:9082").rstrip("/")
+TCP_PORT = int(os.getenv("TCP_PORT", "9912"))
+HTTP_PORT = int(os.getenv("HTTP_PORT", "8083"))
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:9083").rstrip("/")
 PENDING_FILE = os.getenv("PENDING_FILE", "/tmp/tcp_bridge_pending.jsonl")
 BACKEND_RETRIES = int(os.getenv("BACKEND_RETRIES", "3"))
 BACKEND_RETRY_SLEEP = float(os.getenv("BACKEND_RETRY_SLEEP", "0.4"))

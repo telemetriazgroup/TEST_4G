@@ -1,4 +1,4 @@
-# Lógica TCP — TEST_4G (puerto 9911)
+# Lógica TCP — TEST_4G (puerto 9912)
 
 Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha conexiones TCP, parsea tramas (string/hex/JSON), limpia IPs huérfanas y permite enviar comandos de vuelta al dispositivo. El backend guarda en MongoDB y el frontend actúa como monitor serial web.
 
@@ -8,17 +8,17 @@ Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha c
 
 | Puerto | Servicio | Función |
 |--------|----------|---------|
-| **9911** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
-| **8082** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
-| **9082** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
-| **8090** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
-| **8445** | `ztrack` (HTTP) | App cliente admin / monitor |
-| **29018** | `mongo` (host → 27017 contenedor) | Persistencia |
+| **9912** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
+| **8083** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
+| **9083** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
+| **8091** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
+| **8446** | `ztrack` (HTTP) | App cliente admin / monitor |
+| **29019** | `mongo` (host → 27017 contenedor) | Persistencia |
 
-El dispositivo **se conecta al servidor** por TCP 9911. No es el backend quien abre la conexión hacia el equipo.
+El dispositivo **se conecta al servidor** por TCP 9912. No es el backend quien abre la conexión hacia el equipo.
 
 ```
-Dispositivo ──TCP:9911──► tcp_bridge ──HTTP──► backend ──► MongoDB
+Dispositivo ──TCP:9912──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │
                               └── POST /api/internal/* (telemetría, conexión)
 ```
@@ -27,10 +27,10 @@ Dispositivo ──TCP:9911──► tcp_bridge ──HTTP──► backend ─�
 
 ## Estructura de conexión
 
-1. Al iniciar el contenedor `tcp_bridge`, el servicio `port_cleaner` (Docker Compose) detiene contenedores previos que ocupen el puerto **9911**.
+1. Al iniciar el contenedor `tcp_bridge`, el servicio `port_cleaner` (Docker Compose) detiene contenedores previos que ocupen el puerto **9912**.
 2. `tcp_bridge` arranca un hilo con `tcp_server_loop()`:
    - Crea socket `AF_INET` / `SOCK_STREAM`
-   - `bind(0.0.0.0, 9911)` con `SO_REUSEADDR`
+   - `bind(0.0.0.0, 9912)` con `SO_REUSEADDR`
    - `listen(10)` — hasta 10 conexiones en cola
 3. Por cada `accept()`, se lanza un **hilo independiente** `handle_client(conn, addr)`.
 4. Al arrancar también se notifica al backend `POST /api/internal/disconnect_all` para limpiar estados `is_connected` obsoletos en base de datos.
@@ -72,14 +72,14 @@ Así se evita mostrar “30 conectados” cuando en realidad hay 2.
 
 - Por `addr` (`ip:port`) o por `ip` (sesión más reciente de esa IP).
 - Codificación: `string` o `hex`.
-- Bridge: `POST http://tcp_bridge:8082/send`
+- Bridge: `POST http://tcp_bridge:8083/send`
 - Backend (frontend): `POST /api/send`
 
 ---
 
 ## Monitor web
 
-Interfaz serial en `:8090` y Ztrack en `:8445`. Persistencia de mensajes en MongoDB.
+Interfaz serial en `:8091` y Ztrack en `:8446`. Persistencia de mensajes en MongoDB.
 
 
 

@@ -137,7 +137,7 @@ Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checko
 
 ## 7. Rama `test-carne` (TCP 9912) — qué hacer al cambiar
 
-Hoy el working tree sigue en **`test-saasa`**. No aplicar estos puertos aquí: rompería 9911.
+Esta rama **`test-carne`** ya tiene el mapa N=2 aplicado (TCP 9912). `test-saasa` en Git sigue en 9911.
 
 Cuando pases a carne, en **otra carpeta** (recomendado) o, si no queda otra, avisar al agente que saasa debe seguir arriba en su carpeta:
 
