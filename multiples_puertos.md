@@ -8,6 +8,7 @@ Hoy:
 |------|-------------------|------|
 | `test_pollo` | `.../TEST_4G` (pollo / pollitos) | Interfaz y datos de pollo BB |
 | `test-saasa` | otra `.../TEST_4G` (saasa) | Interfaz y datos de esa línea |
+| `test-carne` | otra carpeta (carne) | TCP **9912** — ver [ram_tcp.md](./ram_tcp.md) sección 7–8 |
 
 Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puertos del host y volúmenes. Si dos carpetas se llaman `TEST_4G` y el compose no declara `name:`, las dos se llaman proyecto `test_4g` y se pisan.
 
