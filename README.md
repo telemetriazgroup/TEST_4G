@@ -26,6 +26,8 @@ Dispositivo ──TCP:9911──► tcp_bridge ──HTTP──► backend ─�
 
 ## Arranque (Docker)
 
+Esta rama es **`test-saasa`** (TCP **9911**). No compartir puertos ni Mongo con `test_pollo` (9910). Causas: [multiples_puertos.md](./multiples_puertos.md). Nueva rama: [ram_tcp.md](./ram_tcp.md).
+
 ```bash
 docker compose up --build -d
 ```

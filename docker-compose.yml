@@ -1,3 +1,5 @@
+name: test_4g_saasa
+
 services:
   port_cleaner:
     image: docker:27-cli
