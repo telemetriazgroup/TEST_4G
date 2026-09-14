@@ -124,6 +124,10 @@
       Enviadas
       <small>vivo + histórico · POST</small>
     </button>
+    <button type="button" class="tab" data-tab="saasa" role="tab" aria-selected="false">
+      SAASA
+      <small>GET_DATA · POST · registro</small>
+    </button>
     <button type="button" class="tab" data-tab="status" role="tab" aria-selected="false">
       Seguimiento
       <small>decodificado · por fecha</small>
@@ -315,6 +319,55 @@
       </div>
       <p id="emptySent" class="empty show">Aún no hay envíos. Las tramas en vivo y las encoladas del histórico aparecen aquí cuando se POST-ean.</p>
       <p id="sentMeta" class="hint">—</p>
+    </section>
+
+    <!-- SAASA (consulta 9911 + POST API) -->
+    <section class="panel monitor tab-panel" id="panelSaasa">
+      <div class="panel-head">
+        <h2 id="saasaTitle">SAASA · envíos</h2>
+        <span id="saasaCount" class="badge">0</span>
+        <div class="filters">
+          <select id="saasaStatus" aria-label="Estado">
+            <option value="all" selected>Todos los estados</option>
+            <option value="ok">POST OK</option>
+            <option value="error">Error API</option>
+            <option value="timeout">Timeout RX</option>
+            <option value="no_device">Sin dispositivo</option>
+            <option value="send_failed">TX falló</option>
+          </select>
+          <select id="saasaUnit" aria-label="Unidad">
+            <option value="all" selected>Todas las unidades</option>
+            <option value="SAASA_UNIT111">UNIT111</option>
+            <option value="SAASA_UNIT222">UNIT222</option>
+            <option value="SAASA_UNIT333">UNIT333</option>
+            <option value="SAASA_UNIT444">UNIT444</option>
+            <option value="SAASA_UNIT555">UNIT555</option>
+            <option value="SAASA_UNIT666">UNIT666</option>
+            <option value="SAASA_UNIT777">UNIT777</option>
+            <option value="SAASA_UNIT888">UNIT888</option>
+          </select>
+        </div>
+        <button type="button" id="btnRefreshSaasa" class="btn primary">Actualizar</button>
+        <button type="button" id="btnSaasaCycle" class="btn ghost">Ciclo ahora</button>
+      </div>
+      <p id="saasaMeta" class="hint">Consulta cada minuto · 8 unidades en serie · POST { i, d01: SAASA, d02: rs }</p>
+      <div id="saasaUnits" class="saasa-units"></div>
+      <div id="saasaWrap" class="hours-wrap">
+        <table class="capture-table" id="saasaTable">
+          <thead>
+            <tr>
+              <th>Envío</th>
+              <th>Unidad</th>
+              <th>Estado</th>
+              <th>HTTP</th>
+              <th>Comando</th>
+              <th>JSON POST</th>
+            </tr>
+          </thead>
+          <tbody id="saasaBody"></tbody>
+        </table>
+      </div>
+      <p id="emptySaasa" class="empty show">Aún no hay envíos SAASA. El poller consulta UNIT111…888 cada minuto cuando hay TCP en 9911.</p>
     </section>
 
     <!-- SEGUIMIENTO -->

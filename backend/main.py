@@ -31,6 +31,7 @@ import decode_rs
 import decode_tk
 import homologate as homo
 import reglas as regl
+import saasa
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g_9911")
@@ -325,11 +326,16 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.saasa_envios.create_index([("ts", -1)])
+    await db.saasa_envios.create_index([("unit", 1), ("ts", -1)])
+    await db.saasa_envios.create_index([("status", 1), ("ts", -1)])
+    await db.saasa_envios.create_index([("cycle_id", 1), ("ts", -1)])
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
     asyncio.create_task(_backfill_seguimiento())
     asyncio.create_task(_comandos_janitor())
+    asyncio.create_task(_saasa_poll_worker())
 
 
 @app.on_event("shutdown")
@@ -466,6 +472,7 @@ async def internal_telemetry(body: TelemetryBody):
     asyncio.create_task(_homologate_after_persist(doc))
     _enqueue_seguimiento(doc)
     asyncio.create_task(_comandos_on_rx(doc))
+    _saasa_on_rx(doc)
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -1301,6 +1308,210 @@ async def _homologate_queue_worker() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SAASA: GET_DATA cada minuto → POST {i, d01, d02}
+# ---------------------------------------------------------------------------
+
+_saasa_pending: asyncio.Future | None = None
+_saasa_running = False
+_saasa_state: dict[str, Any] = {
+    "last_cycle_at": None,
+    "last_cycle_id": None,
+    "last_error": None,
+}
+
+
+def _saasa_on_rx(doc: dict[str, Any]) -> None:
+    global _saasa_pending
+    fut = _saasa_pending
+    if fut is None or fut.done():
+        return
+    if (doc.get("direction") or "rx").lower() != "rx":
+        return
+    parsed = saasa.parse_rx(doc.get("text") or "")
+    if parsed:
+        fut.set_result((parsed, doc))
+
+
+async def _saasa_live_target() -> tuple[str | None, str | None]:
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http:
+            r = await http.get(f"{BRIDGE_URL}/devices")
+            data = r.json()
+    except Exception:
+        return None, None
+    devices = data.get("devices") or []
+    if not devices:
+        return None, None
+    d0 = devices[0]
+    return d0.get("addr"), d0.get("ip")
+
+
+async def _saasa_post(payload: dict[str, Any]) -> tuple[int | None, str | None, str | None]:
+    url = saasa.env_url()
+    last_err = None
+    body = None
+    retries = saasa.env_post_retries()
+    timeout = saasa.env_post_timeout_s()
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                r = await http.post(url, json=payload)
+            body = (r.text or "")[:500]
+            if 200 <= r.status_code < 300:
+                return r.status_code, None, body
+            last_err = f"http_{r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+            body = None
+        if attempt < retries:
+            await asyncio.sleep(0.5 * attempt)
+    return None, last_err, body
+
+
+async def _saasa_record(doc: dict[str, Any]) -> dict[str, Any]:
+    stored = dict(doc)
+    await db.saasa_envios.insert_one(stored)
+    out = _jsonable(stored)
+    await broadcast({"type": "saasa", "envio": out})
+    return out
+
+
+async def _saasa_poll_one(
+    *,
+    unit: str,
+    addr: str | None,
+    ip: str | None,
+    cycle_id: str,
+    source: str,
+) -> dict[str, Any]:
+    global _saasa_pending
+    now = _now()
+    cmd = saasa.command_for(unit)
+    base: dict[str, Any] = {
+        "ts": now,
+        "cycle_id": cycle_id,
+        "unit": unit,
+        "command": cmd,
+        "addr": addr,
+        "ip": ip,
+        "url": saasa.env_url(),
+        "host": saasa.destination_host(),
+        "source": source,
+        "d01": saasa.D01_STATIC,
+    }
+    if not addr and not ip:
+        base.update({"status": "no_device", "error": "sin socket TCP vivo"})
+        return await _saasa_record(base)
+
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _saasa_pending = fut
+    try:
+        try:
+            send_result = await _bridge_send_line(addr, ip, cmd)
+        except Exception as e:
+            base.update({"status": "send_failed", "error": str(e)})
+            return await _saasa_record(base)
+        if not send_result.get("ok"):
+            base.update(
+                {
+                    "status": "send_failed",
+                    "error": send_result.get("error") or "bridge send falló",
+                }
+            )
+            return await _saasa_record(base)
+        try:
+            parsed, rxdoc = await asyncio.wait_for(fut, timeout=saasa.env_rx_timeout_s())
+        except asyncio.TimeoutError:
+            base.update({"status": "timeout", "error": "sin RX SAASA a tiempo"})
+            return await _saasa_record(base)
+        payload = saasa.build_payload(unit, parsed["rs"])
+        http_status, err, body = await _saasa_post(payload)
+        base.update(
+            {
+                "payload": payload,
+                "payload_hash": saasa.payload_hash(payload),
+                "rx_i": parsed.get("i"),
+                "d02": payload["d02"],
+                "rx_ts": rxdoc.get("ts"),
+                "session_id": rxdoc.get("session_id"),
+                "http_status": http_status,
+                "http_body": body,
+                "status": "ok" if http_status else "error",
+                "error": err,
+            }
+        )
+        return await _saasa_record(base)
+    finally:
+        if _saasa_pending is fut:
+            _saasa_pending = None
+        if not fut.done():
+            fut.cancel()
+
+
+async def _saasa_run_cycle(source: str = "poll") -> dict[str, Any]:
+    global _saasa_running
+    if _saasa_running:
+        return {"ok": False, "error": "ciclo en curso"}
+    _saasa_running = True
+    cycle_id = str(uuid.uuid4())
+    started = _now()
+    _saasa_state["last_cycle_id"] = cycle_id
+    _saasa_state["last_cycle_at"] = started
+    _saasa_state["last_error"] = None
+    items: list[dict[str, Any]] = []
+    try:
+        addr, ip = await _saasa_live_target()
+        units = saasa.env_units()
+        for idx, unit in enumerate(units):
+            item = await _saasa_poll_one(
+                unit=unit, addr=addr, ip=ip, cycle_id=cycle_id, source=source
+            )
+            items.append(item)
+            if idx < len(units) - 1:
+                await asyncio.sleep(saasa.env_gap_s())
+        counts: dict[str, int] = {}
+        for it in items:
+            st = str(it.get("status") or "unknown")
+            counts[st] = counts.get(st, 0) + 1
+        log.info("saasa ciclo %s n=%s counts=%s", cycle_id[:8], len(items), counts)
+        return {"ok": True, "cycle_id": cycle_id, "ts": started, "counts": counts, "items": items}
+    except Exception as e:
+        _saasa_state["last_error"] = str(e)
+        log.exception("saasa ciclo falló")
+        return {"ok": False, "cycle_id": cycle_id, "error": str(e), "items": items}
+    finally:
+        _saasa_running = False
+
+
+async def _saasa_poll_worker() -> None:
+    await asyncio.sleep(3)
+    while True:
+        started = time.monotonic()
+        try:
+            if saasa.env_enabled() and saasa.env_url():
+                await _saasa_run_cycle("poll")
+            else:
+                log.info("saasa poller en pausa (disabled o sin URL)")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("saasa poller")
+        elapsed = time.monotonic() - started
+        wait = max(1.0, saasa.env_interval_s() - elapsed)
+        await asyncio.sleep(wait)
+
+
+async def _saasa_last_by_unit() -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for unit in saasa.env_units():
+        row = await db.saasa_envios.find_one({"unit": unit}, {"_id": 0}, sort=[("ts", -1)])
+        if row:
+            out[unit] = row
+    return out
+
+
+# ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
 
@@ -1316,6 +1527,11 @@ async def health():
         "homologate": {
             "enabled": homo.env_enabled() and bool(homo.env_url()),
             "host": homo.destination_host(),
+        },
+        "saasa": {
+            "enabled": saasa.env_enabled() and bool(saasa.env_url()),
+            "host": saasa.destination_host(),
+            "running": _saasa_running,
         },
     }
 
@@ -1337,6 +1553,69 @@ async def homologate_status(limit: int = 20):
         "recent": logs,
         "queue": _queue_snapshot(),
     }
+
+
+@app.get("/api/saasa/status")
+async def saasa_status():
+    pipeline = [{"$group": {"_id": "$status", "n": {"$sum": 1}}}]
+    grouped = await db.saasa_envios.aggregate(pipeline).to_list(20)
+    counts = {row["_id"] or "unknown": row["n"] for row in grouped}
+    last_by_unit = await _saasa_last_by_unit()
+    return {
+        "enabled": saasa.env_enabled(),
+        "configured": bool(saasa.env_url()),
+        "url": saasa.env_url(),
+        "host": saasa.destination_host(),
+        "interval_s": saasa.env_interval_s(),
+        "rx_timeout_s": saasa.env_rx_timeout_s(),
+        "gap_s": saasa.env_gap_s(),
+        "units": saasa.env_units(),
+        "running": _saasa_running,
+        "last_cycle_at": _saasa_state.get("last_cycle_at"),
+        "last_cycle_id": _saasa_state.get("last_cycle_id"),
+        "last_error": _saasa_state.get("last_error"),
+        "counts": counts,
+        "last_by_unit": last_by_unit,
+    }
+
+
+@app.get("/api/saasa/envios")
+async def saasa_envios(
+    status: str | None = None,
+    unit: str | None = None,
+    cycle_id: str | None = None,
+    limit: int = 200,
+):
+    q: dict[str, Any] = {}
+    if status and status != "all":
+        q["status"] = status
+    if unit and unit != "all":
+        q["unit"] = unit.strip().upper()
+    if cycle_id:
+        q["cycle_id"] = cycle_id
+    limit = max(1, min(limit, 1000))
+    cursor = db.saasa_envios.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
+    items = await cursor.to_list(limit)
+    total = await db.saasa_envios.count_documents(q)
+    return {
+        "ok": True,
+        "total": total,
+        "items": items,
+        "running": _saasa_running,
+        "host": saasa.destination_host(),
+    }
+
+
+@app.post("/api/saasa/cycle")
+async def saasa_cycle():
+    if not saasa.env_enabled():
+        raise HTTPException(400, "SAASA_ENABLED=0")
+    if not saasa.env_url():
+        raise HTTPException(400, "SAASA_URL vacía")
+    result = await _saasa_run_cycle("manual")
+    if not result.get("ok") and result.get("error") == "ciclo en curso":
+        raise HTTPException(409, "ciclo en curso")
+    return result
 
 
 @app.get("/api/homologate/sent")

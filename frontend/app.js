@@ -310,6 +310,17 @@
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
+    panelSaasa: document.getElementById("panelSaasa"),
+    saasaTitle: document.getElementById("saasaTitle"),
+    saasaCount: document.getElementById("saasaCount"),
+    saasaMeta: document.getElementById("saasaMeta"),
+    saasaStatus: document.getElementById("saasaStatus"),
+    saasaUnit: document.getElementById("saasaUnit"),
+    saasaBody: document.getElementById("saasaBody"),
+    saasaUnits: document.getElementById("saasaUnits"),
+    emptySaasa: document.getElementById("emptySaasa"),
+    btnRefreshSaasa: document.getElementById("btnRefreshSaasa"),
+    btnSaasaCycle: document.getElementById("btnSaasaCycle"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
     statusKpis: document.getElementById("statusKpis"),
@@ -578,12 +589,14 @@
       els.panelHistory.classList.toggle("active", activeTab === "history");
       els.panelArchive.classList.toggle("active", activeTab === "archive");
       if (els.panelSent) els.panelSent.classList.toggle("active", activeTab === "sent");
+      if (els.panelSaasa) els.panelSaasa.classList.toggle("active", activeTab === "saasa");
       if (els.panelStatus) els.panelStatus.classList.toggle("active", activeTab === "status");
       if (els.panelCmd) els.panelCmd.classList.toggle("active", activeTab === "cmd");
       if (els.panelReglas) els.panelReglas.classList.toggle("active", activeTab === "reglas");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
+      if (activeTab === "saasa") loadSaasa();
       if (activeTab === "status") loadSeguimiento();
       if (activeTab === "cmd") loadComandos();
       if (activeTab === "reglas") loadReglas();
@@ -1386,6 +1399,7 @@
     if (activeTab === "history") await loadHistory();
     if (activeTab === "archive") await loadArchiveTab();
     if (activeTab === "sent") await loadSent();
+    if (activeTab === "saasa") await loadSaasa();
     if (activeTab === "status") await loadSeguimiento();
     if (activeTab === "cmd") await loadComandos();
     if (activeTab === "reglas") await loadReglas();
@@ -1409,6 +1423,7 @@
         if (msg.type === "seguimiento" && activeTab === "status") {
           if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
         }
+        if (msg.type === "saasa" && activeTab === "saasa") loadSaasa();
         if (msg.type === "comando" && (activeTab === "cmd" || activeTab === "reglas")) {
           if (activeTab === "cmd") loadComandos();
           if (activeTab === "reglas") loadReglas();
@@ -1569,6 +1584,109 @@
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+
+  function saasaStatusLabel(st) {
+    if (st === "ok") return "POST OK";
+    if (st === "error") return "Error API";
+    if (st === "timeout") return "Timeout RX";
+    if (st === "no_device") return "Sin TCP";
+    if (st === "send_failed") return "TX falló";
+    return st || "—";
+  }
+
+  function renderSaasaUnits(lastByUnit, units) {
+    if (!els.saasaUnits) return;
+    const list = units && units.length ? units : Object.keys(lastByUnit || {});
+    els.saasaUnits.innerHTML = "";
+    for (const unit of list) {
+      const row = (lastByUnit && lastByUnit[unit]) || {};
+      const div = document.createElement("div");
+      div.className = "saasa-chip";
+      const st = row.status || "—";
+      div.innerHTML =
+        `<strong>${esc(unit.replace("SAASA_", ""))}</strong>` +
+        `<span class="type-badge st-${esc(st)}">${esc(saasaStatusLabel(st))}</span>` +
+        `<span class="muted">${esc(row.ts ? formatTs(row.ts) : "sin dato")}</span>`;
+      els.saasaUnits.appendChild(div);
+    }
+  }
+
+  function renderSaasa(items, meta) {
+    if (!els.saasaBody) return;
+    els.saasaBody.innerHTML = "";
+    const rows = items || [];
+    if (els.emptySaasa) els.emptySaasa.classList.toggle("show", rows.length === 0);
+    if (els.saasaCount) els.saasaCount.textContent = String(meta && meta.total != null ? meta.total : rows.length);
+    for (const it of rows) {
+      const tr = document.createElement("tr");
+      const payload = it.payload || (it.d02 ? { i: it.unit, d01: it.d01 || "SAASA", d02: it.d02 } : null);
+      const preview = payload && payload.d02
+        ? String(payload.d02).slice(0, 40) + (payload.d02.length > 40 ? "…" : "")
+        : it.error || "—";
+      const json = payload ? JSON.stringify(payload, null, 2) : it.error || "—";
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+        `<td class="mono">${esc(it.unit || "—")}</td>` +
+        `<td><span class="type-badge st-${esc(it.status || "")}">${esc(saasaStatusLabel(it.status))}</span></td>` +
+        `<td class="mono">${esc(it.http_status != null ? it.http_status : it.error || "—")}</td>` +
+        `<td class="mono muted">${esc(it.command || "—")}</td>` +
+        `<td class="payload-cell"><details><summary>${esc(preview)}</summary><pre>${esc(json)}</pre></details></td>`;
+      els.saasaBody.appendChild(tr);
+    }
+  }
+
+  async function loadSaasa() {
+    if (els.saasaMeta) els.saasaMeta.textContent = "Cargando SAASA…";
+    const p = new URLSearchParams();
+    if (els.saasaStatus && els.saasaStatus.value !== "all") p.set("status", els.saasaStatus.value);
+    if (els.saasaUnit && els.saasaUnit.value !== "all") p.set("unit", els.saasaUnit.value);
+    p.set("limit", "300");
+    try {
+      const [stR, enR] = await Promise.all([
+        fetch(`${API}/api/saasa/status`),
+        fetch(`${API}/api/saasa/envios?${p}`),
+      ]);
+      const st = await stR.json();
+      const data = await enR.json();
+      renderSaasaUnits(st.last_by_unit || {}, st.units || []);
+      renderSaasa(data.items || [], data);
+      const counts = st.counts || {};
+      const parts = Object.keys(counts).map((k) => `${k} ${counts[k]}`);
+      if (els.saasaMeta) {
+        els.saasaMeta.textContent =
+          `${st.enabled ? "activo" : "pausado"} · ${st.host || "sin host"} · cada ${st.interval_s}s` +
+          (st.running ? " · ciclo en curso" : "") +
+          (st.last_cycle_at ? ` · último ciclo ${formatTs(st.last_cycle_at)}` : "") +
+          (parts.length ? ` · ${parts.join(" · ")}` : "") +
+          (st.last_error ? ` · err ${st.last_error}` : "");
+      }
+    } catch (e) {
+      if (els.saasaMeta) els.saasaMeta.textContent = String(e);
+    }
+  }
+
+  if (els.btnRefreshSaasa) els.btnRefreshSaasa.addEventListener("click", loadSaasa);
+  if (els.saasaStatus) els.saasaStatus.addEventListener("change", loadSaasa);
+  if (els.saasaUnit) els.saasaUnit.addEventListener("change", loadSaasa);
+  if (els.btnSaasaCycle) {
+    els.btnSaasaCycle.addEventListener("click", async () => {
+      els.btnSaasaCycle.disabled = true;
+      try {
+        const r = await fetch(`${API}/api/saasa/cycle`, { method: "POST" });
+        const data = await r.json();
+        if (els.saasaMeta) {
+          els.saasaMeta.textContent = data.ok
+            ? `ciclo manual ${data.cycle_id || ""}`
+            : data.error || data.detail || "ciclo no iniciado";
+        }
+        await loadSaasa();
+      } catch (e) {
+        if (els.saasaMeta) els.saasaMeta.textContent = String(e);
+      } finally {
+        els.btnSaasaCycle.disabled = false;
+      }
+    });
+  }
 
   const MODE_ES = {
     chilled: "Refrigerado",
@@ -2561,6 +2679,7 @@
   setInterval(refreshHomoQueue, 2000);
   setInterval(() => {
     if (activeTab === "sent") loadSent();
+    if (activeTab === "saasa") loadSaasa();
   }, 4000);
 
   els.btnSweep.addEventListener("click", async () => {

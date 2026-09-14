@@ -610,6 +610,25 @@ body.is-client .layout { display: none; }
 .st-queued, .st-sending { background: #efe6d4; color: #6b4a12; }
 .src-live { background: #dce6f5; color: #1e3a6e; }
 .src-queue { background: #e8e0f0; color: #4a2d6b; }
+.st-timeout, .st-no_device, .st-send_failed { background: #efe6d4; color: #6b4a12; }
+
+.saasa-units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0 0.75rem 0.5rem;
+}
+.saasa-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 7.5rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #d5dde6;
+  border-radius: 8px;
+  background: #f7f9fb;
+  font-size: 0.72rem;
+}
 
 .payload-cell {
   max-width: 420px;
