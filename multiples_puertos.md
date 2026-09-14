@@ -8,7 +8,9 @@ Hoy:
 |------|-------------------|------|
 | `test_pollo` | `.../TEST_4G` (pollo / pollitos) | Interfaz y datos de pollo BB |
 | `test-saasa` | otra `.../TEST_4G` (saasa) | Interfaz y datos de esa línea |
-| `test-carne` | otra carpeta (carne) | TCP **9912** — ver [ram_tcp.md](./ram_tcp.md) sección 7–8 |
+| `test-carne` | otra carpeta (carne) | TCP **9912** — [ram_tcp.md](./ram_tcp.md) §7–8 |
+| `test-usa` | otra carpeta (usa) | TCP **9913** — [ram_tcp.md](./ram_tcp.md) §9–10 |
+| `test-starcool` | otra carpeta (starcool) | TCP **9914** — [ram_tcp.md](./ram_tcp.md) §11–12 |
 
 Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puertos del host y volúmenes. Si dos carpetas se llaman `TEST_4G` y el compose no declara `name:`, las dos se llaman proyecto `test_4g` y se pisan.
 
@@ -44,7 +46,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9911` |
 | Volumen | `mongo_data_9911` (Compose lo nombra `test_4g_saasa_mongo_data_9911`) |
 
-### `test-carne` — TCP 9912 (esta rama)
+### `test-carne` — TCP 9912
 
 | Recurso | Valor |
 |---------|--------|
@@ -58,7 +60,35 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9912` |
 | Volumen | `mongo_data_9912` (Compose lo nombra `test_4g_carne_mongo_data_9912`) |
 
-Pollo → **9910**. Saasa → **9911**. Carne → **9912**. Las URLs no se mezclan.
+### `test-usa` — TCP 9913
+
+| Recurso | Valor |
+|---------|--------|
+| Proyecto Compose | `test_4g_usa` |
+| TCP dispositivo | **9913** |
+| Bridge HTTP | 8084 |
+| Backend | 9084 |
+| Superadmin serial | 8092 |
+| Ztrack | 8447 |
+| Mongo host | 29020 → 27017 |
+| Base Mongo | `test_4g_9913` |
+| Volumen | `mongo_data_9913` (Compose lo nombra `test_4g_usa_mongo_data_9913`) |
+
+### `test-starcool` — TCP 9914 (esta rama)
+
+| Recurso | Valor |
+|---------|--------|
+| Proyecto Compose | `test_4g_starcool` |
+| TCP dispositivo | **9914** |
+| Bridge HTTP | 8085 |
+| Backend | 9085 |
+| Superadmin serial | 8093 |
+| Ztrack | 8448 |
+| Mongo host | 29021 → 27017 |
+| Base Mongo | `test_4g_9914` |
+| Volumen | `mongo_data_9914` (Compose lo nombra `test_4g_starcool_mongo_data_9914`) |
+
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. Las URLs no se mezclan.
 
 En `test-saasa` el `docker-compose.yml` ya lleva `name: test_4g_saasa`. En `test_pollo` hay que poner `name: test_4g_pollo` (si esa rama aún no lo tiene, los contenedores se llaman `test_4g-*` y chocan con cualquier otra carpeta también llamada `TEST_4G`).
 

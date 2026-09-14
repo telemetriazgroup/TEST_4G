@@ -16,13 +16,21 @@ Por qué no se puede “solo cambiar de rama” en la misma carpeta: [multiples_
 | Carpeta de trabajo distinta | `/ruta/saasa/TEST_4G` | Sí (recomendado) |
 | Rama de origen | `test_pollo` o `test-saasa` | Sí |
 
-`N` = cuántos enteros sumar a **todos** los puertos de host de la tabla base. `N=0` es pollo. `N=1` es saasa. `N=2` es **`test-carne`** → TCP **9912**.
+`N` = cuántos enteros sumar a **todos** los puertos de host de la tabla base.
+
+| N | Rama | TCP |
+|---|------|-----|
+| 0 | `test_pollo` | 9910 |
+| 1 | `test-saasa` | 9911 |
+| 2 | `test-carne` | 9912 |
+| 3 | `test-usa` | **9913** |
+| 4 | `test-starcool` | **9914** |
 
 Antes de elegir `N`, en el servidor:
 
 ```bash
-ss -lnt | grep -E '991[0-9]|808[1-9]|908[1-9]|844[4-9]|2901[7-9]'
-docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E '991|8089|8090|8444|8445|9081|9082'
+ss -lnt | grep -E '991[0-9]|808[1-9]|908[1-9]|844[4-8]|2901[7-9]|2902[01]'
+docker ps --format '{{.Names}}\t{{.Ports}}' | grep -E '991|8089|809[0-3]|844[4-8]|908[1-5]'
 ```
 
 Si el TCP o cualquier HTTP de la tabla ya está ocupado, subir `N` otra vez.
@@ -33,18 +41,18 @@ No usar **8443** (preview Figma de otro proyecto). El 27017 interno de Mongo **n
 
 ## 2. Fórmula de puertos (base = `test_pollo`, N = 0)
 
-| Recurso | Fórmula | N=0 pollo | N=1 saasa | N=2 carne |
-|---------|---------|-----------|-----------|-----------|
-| TCP dispositivo | `9910 + N` | 9910 | 9911 | **9912** |
-| Bridge HTTP | `8081 + N` | 8081 | 8082 | 8083 |
-| Backend | `9081 + N` | 9081 | 9082 | 9083 |
-| Superadmin serial | `8089 + N` | 8089 | 8090 | 8091 |
-| Ztrack | `8444 + N` | 8444 | 8445 | 8446 |
-| Mongo host | `29017 + N` → 27017 | 29017 | 29018 | 29019 |
-| Proyecto Compose `name:` | `test_4g_<slug>` | `test_4g_pollo` | `test_4g_saasa` | `test_4g_carne` |
-| `MONGO_DB` | `test_4g_<TCP>` | `test_4g` | `test_4g_9911` | `test_4g_9912` |
-| Volumen Compose | `mongo_data_<TCP>` | `mongo_data` | `mongo_data_9911` | `mongo_data_9912` |
-| `CLEAN_PORT` | igual que TCP | 9910 | 9911 | 9912 |
+| Recurso | Fórmula | N=0 pollo | N=1 saasa | N=2 carne | N=3 usa | N=4 starcool |
+|---------|---------|-----------|-----------|-----------|---------|--------------|
+| TCP dispositivo | `9910 + N` | 9910 | 9911 | 9912 | **9913** | **9914** |
+| Bridge HTTP | `8081 + N` | 8081 | 8082 | 8083 | 8084 | 8085 |
+| Backend | `9081 + N` | 9081 | 9082 | 9083 | 9084 | 9085 |
+| Superadmin serial | `8089 + N` | 8089 | 8090 | 8091 | 8092 | 8093 |
+| Ztrack | `8444 + N` | 8444 | 8445 | 8446 | 8447 | 8448 |
+| Mongo host | `29017 + N` → 27017 | 29017 | 29018 | 29019 | 29020 | 29021 |
+| Proyecto Compose `name:` | `test_4g_<slug>` | `test_4g_pollo` | `test_4g_saasa` | `test_4g_carne` | `test_4g_usa` | `test_4g_starcool` |
+| `MONGO_DB` | `test_4g_<TCP>` | `test_4g` | `test_4g_9911` | `test_4g_9912` | `test_4g_9913` | `test_4g_9914` |
+| Volumen Compose | `mongo_data_<TCP>` | `mongo_data` | `mongo_data_9911` | `mongo_data_9912` | `mongo_data_9913` | `mongo_data_9914` |
+| `CLEAN_PORT` | igual que TCP | 9910 | 9911 | 9912 | 9913 | 9914 |
 
 `port_cleaner` solo debe matar contenedores de **ese** TCP, nunca el 9910 si esta rama es 9912.
 
@@ -137,7 +145,7 @@ Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checko
 
 ## 7. Rama `test-carne` (TCP 9912) — qué hacer al cambiar
 
-Esta rama **`test-carne`** ya tiene el mapa N=2 aplicado (TCP 9912). `test-saasa` en Git sigue en 9911.
+Hoy el working tree de esta carpeta es **`test-starcool`** (TCP **9914**). Carne queda en `test_4g_carne` (9912) si no se bajó.
 
 Cuando pases a carne, en **otra carpeta** (recomendado) o, si no queda otra, avisar al agente que saasa debe seguir arriba en su carpeta:
 
@@ -209,6 +217,126 @@ Haz esto, en orden:
 5. docker compose up -d --build SOLO en esta carpeta. No hagas down de test_4g_saasa ni de test_4g_pollo.
 6. Verifica: curl http://localhost:9083/api/health → db test_4g_9912; contenedores test_4g_carne-*; ss -lnt | grep 9912; serial :8091 y ztrack :8446 responden.
 7. Al terminar entrega la tabla de puertos carne y deja test-saasa (9911) intacto.
+
+Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
+```
+
+---
+
+## 9. Rama `test-usa` (TCP 9913)
+
+Carpeta propia. Origen recomendado: `test-carne` (ya trae ztrack y aislamiento).
+
+| Recurso | Valor usa |
+|---------|-----------|
+| Rama | `test-usa` |
+| `name:` | `test_4g_usa` |
+| TCP | **9913** |
+| Bridge HTTP | 8084 |
+| Backend | http://localhost:9084 |
+| Serial | http://localhost:8092 |
+| Ztrack | http://localhost:8447 |
+| Mongo host | 29020 → 27017 |
+| `MONGO_DB` | `test_4g_9913` |
+| Volumen | `mongo_data_9913` |
+| `CLEAN_PORT` | 9913 |
+| Contenedores | `test_4g_usa-*` |
+
+```bash
+git checkout test-carne
+git checkout -b test-usa
+# pegar el prompt de la sección 10
+```
+
+---
+
+## 10. Prompt listo: `test-usa`
+
+```text
+Sigue el protocolo de ram_tcp.md (TEST_4G). No improvises puertos.
+
+Entrada:
+- Rama Git: test-usa
+- Slug Compose: usa
+- Offset N: 3
+- Rama origen: test-carne
+- TCP: 9913
+
+Haz esto, en orden:
+1. Confirma la carpeta y la rama. Si no existe test-usa, créala desde test-carne (git checkout test-carne && git checkout -b test-usa). Si 9913, 8084, 9084, 8092, 8447 o 29020 ya están ocupados, PARA y avisa. No uses 8443.
+2. Estamos en N=3. Deja TODOS los binds/defaults en el mapa usa (da igual si venían de carne 9912 o saasa 9911):
+   - name: test_4g_usa
+   - TCP 9913, bridge 8084, backend 9084, serial 8092, ztrack 8447, mongo host 29020:27017
+   - MONGO_DB=test_4g_9913
+   - volumen mongo_data_9913
+   - CLEAN_PORT=9913
+   - VITE_SERIAL_URL y links de UI a :8092 y :8447
+   Mongo interno se queda en 27017. No reescribas dumps JSON ni hex 82A7.
+3. Archivos de ram_tcp.md sección 4. docker-compose.yml debe quedar name: test_4g_usa.
+4. Actualiza README.md, contexto.md, multiples_puertos.md y la tabla de ram_tcp.md (usa = N=3, hecho).
+5. docker compose up -d --build SOLO en esta carpeta. No hagas down de test_4g_carne, test_4g_saasa ni test_4g_pollo.
+6. Verifica: curl http://localhost:9084/api/health → db test_4g_9913; contenedores test_4g_usa-*; ss -lnt | grep 9913; serial :8092 y ztrack :8447 responden.
+7. Al terminar entrega la tabla de puertos usa y deja las otras ramas intactas.
+
+Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
+```
+
+---
+
+## 11. Rama `test-starcool` (TCP 9914) — hecho (N=4)
+
+Carpeta propia. Origen recomendado: `test-carne`. Esta rama ya tiene el mapa N=4 aplicado.
+
+| Recurso | Valor starcool |
+|---------|----------------|
+| Rama | `test-starcool` |
+| `name:` | `test_4g_starcool` |
+| TCP | **9914** |
+| Bridge HTTP | 8085 |
+| Backend | http://localhost:9085 |
+| Serial | http://localhost:8093 |
+| Ztrack | http://localhost:8448 |
+| Mongo host | 29021 → 27017 |
+| `MONGO_DB` | `test_4g_9914` |
+| Volumen | `mongo_data_9914` |
+| `CLEAN_PORT` | 9914 |
+| Contenedores | `test_4g_starcool-*` |
+
+```bash
+git checkout test-carne
+git checkout -b test-starcool
+# pegar el prompt de la sección 12
+```
+
+---
+
+## 12. Prompt listo: `test-starcool`
+
+```text
+Sigue el protocolo de ram_tcp.md (TEST_4G). No improvises puertos.
+
+Entrada:
+- Rama Git: test-starcool
+- Slug Compose: starcool
+- Offset N: 4
+- Rama origen: test-carne
+- TCP: 9914
+
+Haz esto, en orden:
+1. Confirma la carpeta y la rama. Si no existe test-starcool, créala desde test-carne (git checkout test-carne && git checkout -b test-starcool). Si 9914, 8085, 9085, 8093, 8448 o 29021 ya están ocupados, PARA y avisa. No uses 8443.
+2. Estamos en N=4. Deja TODOS los binds/defaults en el mapa starcool (da igual si venían de carne 9912 o saasa 9911):
+   - name: test_4g_starcool
+   - TCP 9914, bridge 8085, backend 9085, serial 8093, ztrack 8448, mongo host 29021:27017
+   - MONGO_DB=test_4g_9914
+   - volumen mongo_data_9914
+   - CLEAN_PORT=9914
+   - VITE_SERIAL_URL y links de UI a :8093 y :8448
+   Mongo interno se queda en 27017. No reescribas dumps JSON ni hex 82A7.
+3. Archivos de ram_tcp.md sección 4. docker-compose.yml debe quedar name: test_4g_starcool.
+4. Actualiza README.md, contexto.md, multiples_puertos.md y la tabla de ram_tcp.md (starcool = N=4, hecho).
+5. docker compose up -d --build SOLO en esta carpeta. No hagas down de test_4g_carne, test_4g_usa, test_4g_saasa ni test_4g_pollo.
+6. Verifica: curl http://localhost:9085/api/health → db test_4g_9914; contenedores test_4g_starcool-*; ss -lnt | grep 9914; serial :8093 y ztrack :8448 responden.
+7. Al terminar entrega la tabla de puertos starcool y deja las otras ramas intactas.
 
 Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
 ```
