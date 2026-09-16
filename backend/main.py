@@ -31,6 +31,7 @@ import decode_rs
 import decode_tk
 import homologate as homo
 import reglas as regl
+import starcool as stc
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g_9914")
@@ -325,11 +326,17 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.starcool_envios.create_index([("ts", -1)])
+    await db.starcool_envios.create_index([("i", 1), ("ts", -1)])
+    await db.starcool_envios.create_index([("status", 1), ("ts", -1)])
+    await db.starcool_envios.create_index([("addr", 1), ("ts", -1)])
+    await db.starcool_envios.create_index([("payload_hash", 1), ("ts", -1)])
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
     asyncio.create_task(_backfill_seguimiento())
     asyncio.create_task(_comandos_janitor())
+    asyncio.create_task(_starcool_poll_worker())
 
 
 @app.on_event("shutdown")
@@ -466,6 +473,7 @@ async def internal_telemetry(body: TelemetryBody):
     asyncio.create_task(_homologate_after_persist(doc))
     _enqueue_seguimiento(doc)
     asyncio.create_task(_comandos_on_rx(doc))
+    _starcool_on_rx(doc)
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -479,6 +487,10 @@ async def internal_telemetry(body: TelemetryBody):
     }
     if body.tcp_header:
         device_set["tcp_header"] = body.tcp_header
+    parsed_stc = stc.parse_frame(doc)
+    if parsed_stc:
+        device_set["imei"] = parsed_stc["i"]
+        device_set["starcool_d02"] = parsed_stc["d02"]
     await db.devices.update_one(
         {"addr": body.addr},
         {"$set": device_set},
@@ -1301,6 +1313,266 @@ async def _homologate_queue_worker() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Starcool METRO: poll hex por sesión → POST { i, d01, d02 }
+# ---------------------------------------------------------------------------
+
+_starcool_waiters: dict[str, asyncio.Future] = {}
+_starcool_running = False
+_starcool_state: dict[str, Any] = {
+    "last_cycle_at": None,
+    "last_cycle_id": None,
+    "last_error": None,
+    "last_sessions": 0,
+    "last_counts": {},
+}
+
+
+def _starcool_on_rx(doc: dict[str, Any]) -> None:
+    addr = doc.get("addr")
+    if not addr:
+        return
+    fut = _starcool_waiters.get(addr)
+    if fut is None or fut.done():
+        return
+    parsed = stc.parse_frame(doc)
+    if parsed:
+        fut.set_result((parsed, doc))
+
+
+async def _starcool_live_devices() -> list[dict[str, Any]]:
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http:
+            r = await http.get(f"{BRIDGE_URL}/devices")
+            data = r.json()
+    except Exception:
+        return []
+    return [d for d in (data.get("devices") or []) if d.get("addr")]
+
+
+async def _bridge_send_hex(addr: str | None, ip: str | None, hex_msg: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {"message": hex_msg, "encoding": "hex"}
+    if addr:
+        payload["addr"] = addr
+    if ip:
+        payload["ip"] = ip
+    async with httpx.AsyncClient(timeout=5.0) as http:
+        r = await http.post(f"{BRIDGE_URL}/send", json=payload)
+        return r.json()
+
+
+async def _starcool_post(payload: dict[str, Any]) -> tuple[int | None, str | None, str | None]:
+    url = stc.env_url()
+    last_err = None
+    body = None
+    retries = stc.env_post_retries()
+    timeout = stc.env_post_timeout_s()
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                r = await http.post(url, json=payload)
+            body = (r.text or "")[:500]
+            if 200 <= r.status_code < 300:
+                return r.status_code, None, body
+            last_err = f"http_{r.status_code}"
+        except Exception as e:
+            last_err = str(e)
+            body = None
+        if attempt < retries:
+            await asyncio.sleep(0.5 * attempt)
+    return None, last_err, body
+
+
+async def _starcool_recent_duplicate(payload_hash: str) -> bool:
+    window = stc.env_dedup_s()
+    if window <= 0 or not payload_hash:
+        return False
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window)).isoformat()
+    found = await db.starcool_envios.find_one(
+        {"payload_hash": payload_hash, "status": "ok", "ts": {"$gte": since}},
+        {"_id": 1},
+    )
+    return found is not None
+
+
+async def _starcool_record(doc: dict[str, Any]) -> dict[str, Any]:
+    stored = dict(doc)
+    await db.starcool_envios.insert_one(stored)
+    out = _jsonable(stored)
+    await broadcast({"type": "starcool", "envio": out})
+    return out
+
+
+async def _starcool_poll_one(
+    *,
+    addr: str,
+    ip: str | None,
+    cycle_id: str,
+    source: str,
+    sem: asyncio.Semaphore,
+) -> dict[str, Any]:
+    async with sem:
+        now = _now()
+        tx = stc.env_tx_hex()
+        base: dict[str, Any] = {
+            "ts": now,
+            "cycle_id": cycle_id,
+            "addr": addr,
+            "ip": ip,
+            "command": tx,
+            "encoding": "hex",
+            "url": stc.env_url(),
+            "host": stc.destination_host(),
+            "source": source,
+            "d01": stc.env_d01(),
+        }
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        prev = _starcool_waiters.get(addr)
+        if prev and not prev.done():
+            prev.cancel()
+        _starcool_waiters[addr] = fut
+        try:
+            try:
+                send_result = await _bridge_send_hex(addr, ip, tx)
+            except Exception as e:
+                base.update({"status": "send_failed", "error": str(e)})
+                return await _starcool_record(base)
+            if not send_result.get("ok"):
+                base.update(
+                    {
+                        "status": "send_failed",
+                        "error": send_result.get("error") or "bridge send falló",
+                    }
+                )
+                return await _starcool_record(base)
+            try:
+                parsed, rxdoc = await asyncio.wait_for(fut, timeout=stc.env_rx_timeout_s())
+            except asyncio.TimeoutError:
+                base.update({"status": "timeout", "error": "sin RX Starcool a tiempo"})
+                return await _starcool_record(base)
+            payload = stc.build_payload(parsed["i"], parsed["d02"])
+            ph = stc.payload_hash(payload)
+            base.update(
+                {
+                    "i": payload["i"],
+                    "d02": payload["d02"],
+                    "payload": payload,
+                    "payload_hash": ph,
+                    "rx_ts": rxdoc.get("ts"),
+                    "session_id": rxdoc.get("session_id"),
+                }
+            )
+            if await _starcool_recent_duplicate(ph):
+                base.update({"status": "skip_duplicate", "error": "mismo i+d02 reciente"})
+                return await _starcool_record(base)
+            http_status, err, body = await _starcool_post(payload)
+            base.update(
+                {
+                    "http_status": http_status,
+                    "http_body": body,
+                    "status": "ok" if http_status else "error",
+                    "error": err,
+                }
+            )
+            return await _starcool_record(base)
+        finally:
+            if _starcool_waiters.get(addr) is fut:
+                _starcool_waiters.pop(addr, None)
+            if not fut.done():
+                fut.cancel()
+
+
+async def _starcool_run_cycle(source: str = "poll") -> dict[str, Any]:
+    global _starcool_running
+    if _starcool_running:
+        return {"ok": False, "error": "ciclo en curso"}
+    _starcool_running = True
+    cycle_id = str(uuid.uuid4())
+    started = _now()
+    _starcool_state["last_cycle_id"] = cycle_id
+    _starcool_state["last_cycle_at"] = started
+    _starcool_state["last_error"] = None
+    items: list[dict[str, Any]] = []
+    try:
+        devices = await _starcool_live_devices()
+        _starcool_state["last_sessions"] = len(devices)
+        if not devices:
+            _starcool_state["last_counts"] = {"no_device": 1}
+            log.info("starcool ciclo %s sin sockets en 9914", cycle_id[:8])
+            return {
+                "ok": True,
+                "cycle_id": cycle_id,
+                "ts": started,
+                "sessions": 0,
+                "counts": {"no_device": 1},
+                "items": [],
+            }
+        sem = asyncio.Semaphore(stc.env_concurrency())
+        tasks = [
+            _starcool_poll_one(
+                addr=d["addr"],
+                ip=d.get("ip"),
+                cycle_id=cycle_id,
+                source=source,
+                sem=sem,
+            )
+            for d in devices
+        ]
+        items = await asyncio.gather(*tasks)
+        counts: dict[str, int] = {}
+        for it in items:
+            st = str(it.get("status") or "unknown")
+            counts[st] = counts.get(st, 0) + 1
+        _starcool_state["last_counts"] = counts
+        log.info("starcool ciclo %s n=%s counts=%s", cycle_id[:8], len(items), counts)
+        return {
+            "ok": True,
+            "cycle_id": cycle_id,
+            "ts": started,
+            "sessions": len(devices),
+            "counts": counts,
+            "items": items,
+        }
+    except Exception as e:
+        _starcool_state["last_error"] = str(e)
+        log.exception("starcool ciclo falló")
+        return {"ok": False, "cycle_id": cycle_id, "error": str(e), "items": items}
+    finally:
+        _starcool_running = False
+
+
+async def _starcool_poll_worker() -> None:
+    await asyncio.sleep(3)
+    while True:
+        started = time.monotonic()
+        try:
+            if stc.env_enabled() and stc.env_url():
+                await _starcool_run_cycle("poll")
+            else:
+                log.info("starcool poller en pausa (disabled o sin URL)")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("starcool poller")
+        elapsed = time.monotonic() - started
+        wait = max(1.0, stc.env_interval_s() - elapsed)
+        await asyncio.sleep(wait)
+
+
+async def _starcool_last_by_imei(limit: int = 40) -> list[dict[str, Any]]:
+    pipeline = [
+        {"$sort": {"ts": -1}},
+        {"$match": {"i": {"$type": "string", "$ne": ""}}},
+        {"$group": {"_id": "$i", "doc": {"$first": "$$ROOT"}}},
+        {"$replaceRoot": {"newRoot": "$doc"}},
+        {"$project": {"_id": 0}},
+        {"$sort": {"ts": -1}},
+        {"$limit": limit},
+    ]
+    return await db.starcool_envios.aggregate(pipeline).to_list(limit)
+
+
+# ---------------------------------------------------------------------------
 # API pública
 # ---------------------------------------------------------------------------
 
@@ -1316,6 +1588,11 @@ async def health():
         "homologate": {
             "enabled": homo.env_enabled() and bool(homo.env_url()),
             "host": homo.destination_host(),
+        },
+        "starcool": {
+            "enabled": stc.env_enabled() and bool(stc.env_url()),
+            "host": stc.destination_host(),
+            "running": _starcool_running,
         },
     }
 
@@ -1337,6 +1614,76 @@ async def homologate_status(limit: int = 20):
         "recent": logs,
         "queue": _queue_snapshot(),
     }
+
+
+@app.get("/api/starcool/status")
+async def starcool_status():
+    pipeline = [{"$group": {"_id": "$status", "n": {"$sum": 1}}}]
+    grouped = await db.starcool_envios.aggregate(pipeline).to_list(20)
+    counts = {row["_id"] or "unknown": row["n"] for row in grouped}
+    last_by_imei = await _starcool_last_by_imei()
+    live = await _starcool_live_devices()
+    return {
+        "enabled": stc.env_enabled(),
+        "configured": bool(stc.env_url()),
+        "url": stc.env_url(),
+        "host": stc.destination_host(),
+        "interval_s": stc.env_interval_s(),
+        "rx_timeout_s": stc.env_rx_timeout_s(),
+        "tx_hex": stc.env_tx_hex(),
+        "d01": stc.env_d01(),
+        "running": _starcool_running,
+        "live_sessions": len(live),
+        "last_cycle_at": _starcool_state.get("last_cycle_at"),
+        "last_cycle_id": _starcool_state.get("last_cycle_id"),
+        "last_error": _starcool_state.get("last_error"),
+        "last_sessions": _starcool_state.get("last_sessions"),
+        "last_counts": _starcool_state.get("last_counts") or {},
+        "counts": counts,
+        "last_by_imei": last_by_imei,
+    }
+
+
+@app.get("/api/starcool/envios")
+async def starcool_envios(
+    status: str | None = None,
+    ident: str | None = None,
+    addr: str | None = None,
+    cycle_id: str | None = None,
+    limit: int = 200,
+):
+    q: dict[str, Any] = {}
+    if status and status != "all":
+        q["status"] = status
+    if ident:
+        q["i"] = ident.strip()
+    if addr:
+        q["addr"] = addr.strip()
+    if cycle_id:
+        q["cycle_id"] = cycle_id
+    limit = max(1, min(limit, 1000))
+    cursor = db.starcool_envios.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
+    items = await cursor.to_list(limit)
+    total = await db.starcool_envios.count_documents(q)
+    return {
+        "ok": True,
+        "total": total,
+        "items": items,
+        "running": _starcool_running,
+        "host": stc.destination_host(),
+    }
+
+
+@app.post("/api/starcool/cycle")
+async def starcool_cycle():
+    if not stc.env_enabled():
+        raise HTTPException(400, "STARCOOL_ENABLED=0")
+    if not stc.env_url():
+        raise HTTPException(400, "STARCOOL_URL vacía")
+    result = await _starcool_run_cycle("manual")
+    if not result.get("ok") and result.get("error") == "ciclo en curso":
+        raise HTTPException(409, "ciclo en curso")
+    return result
 
 
 @app.get("/api/homologate/sent")

@@ -124,6 +124,10 @@
       Enviadas
       <small>vivo + histórico · POST</small>
     </button>
+    <button type="button" class="tab" data-tab="starcool" role="tab" aria-selected="false">
+      Starcool
+      <small>hex · IMEI · POST METRO</small>
+    </button>
     <button type="button" class="tab" data-tab="status" role="tab" aria-selected="false">
       Seguimiento
       <small>decodificado · por fecha</small>
@@ -315,6 +319,45 @@
       </div>
       <p id="emptySent" class="empty show">Aún no hay envíos. Las tramas en vivo y las encoladas del histórico aparecen aquí cuando se POST-ean.</p>
       <p id="sentMeta" class="hint">—</p>
+    </section>
+
+    <!-- STARCOOL METRO (9914) -->
+    <section class="panel monitor tab-panel" id="panelStarcool">
+      <div class="panel-head">
+        <h2 id="starcoolTitle">Starcool · envíos</h2>
+        <span id="starcoolCount" class="badge">0</span>
+        <div class="filters">
+          <select id="starcoolStatus" aria-label="Estado">
+            <option value="all" selected>Todos los estados</option>
+            <option value="ok">POST OK</option>
+            <option value="error">Error API</option>
+            <option value="timeout">Timeout RX</option>
+            <option value="parse_error">Parse error</option>
+            <option value="send_failed">TX falló</option>
+            <option value="skip_duplicate">Duplicado</option>
+          </select>
+        </div>
+        <button type="button" id="btnRefreshStarcool" class="btn primary">Actualizar</button>
+        <button type="button" id="btnStarcoolCycle" class="btn ghost">Ciclo ahora</button>
+      </div>
+      <p id="starcoolMeta" class="hint">Cada minuto, hex 161613ffffffff8457 a cada sesión 9914 · POST { i: IMEI, d01: METRO, d02 }</p>
+      <div id="starcoolUnits" class="saasa-units"></div>
+      <div id="starcoolWrap" class="hours-wrap">
+        <table class="capture-table" id="starcoolTable">
+          <thead>
+            <tr>
+              <th>Envío</th>
+              <th>IMEI (i)</th>
+              <th>Estado</th>
+              <th>HTTP</th>
+              <th>Sesión</th>
+              <th>JSON POST</th>
+            </tr>
+          </thead>
+          <tbody id="starcoolBody"></tbody>
+        </table>
+      </div>
+      <p id="emptyStarcool" class="empty show">Aún no hay envíos. Con un equipo en TCP 9914 el poller consulta cada minuto y registra el POST aquí.</p>
     </section>
 
     <!-- SEGUIMIENTO -->

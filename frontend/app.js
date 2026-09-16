@@ -310,6 +310,15 @@
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
+    panelStarcool: document.getElementById("panelStarcool"),
+    starcoolCount: document.getElementById("starcoolCount"),
+    starcoolMeta: document.getElementById("starcoolMeta"),
+    starcoolStatus: document.getElementById("starcoolStatus"),
+    starcoolBody: document.getElementById("starcoolBody"),
+    starcoolUnits: document.getElementById("starcoolUnits"),
+    emptyStarcool: document.getElementById("emptyStarcool"),
+    btnRefreshStarcool: document.getElementById("btnRefreshStarcool"),
+    btnStarcoolCycle: document.getElementById("btnStarcoolCycle"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
     statusKpis: document.getElementById("statusKpis"),
@@ -578,12 +587,14 @@
       els.panelHistory.classList.toggle("active", activeTab === "history");
       els.panelArchive.classList.toggle("active", activeTab === "archive");
       if (els.panelSent) els.panelSent.classList.toggle("active", activeTab === "sent");
+      if (els.panelStarcool) els.panelStarcool.classList.toggle("active", activeTab === "starcool");
       if (els.panelStatus) els.panelStatus.classList.toggle("active", activeTab === "status");
       if (els.panelCmd) els.panelCmd.classList.toggle("active", activeTab === "cmd");
       if (els.panelReglas) els.panelReglas.classList.toggle("active", activeTab === "reglas");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
+      if (activeTab === "starcool") loadStarcool();
       if (activeTab === "status") loadSeguimiento();
       if (activeTab === "cmd") loadComandos();
       if (activeTab === "reglas") loadReglas();
@@ -1386,6 +1397,7 @@
     if (activeTab === "history") await loadHistory();
     if (activeTab === "archive") await loadArchiveTab();
     if (activeTab === "sent") await loadSent();
+    if (activeTab === "starcool") await loadStarcool();
     if (activeTab === "status") await loadSeguimiento();
     if (activeTab === "cmd") await loadComandos();
     if (activeTab === "reglas") await loadReglas();
@@ -1409,6 +1421,7 @@
         if (msg.type === "seguimiento" && activeTab === "status") {
           if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
         }
+        if (msg.type === "starcool" && activeTab === "starcool") loadStarcool();
         if (msg.type === "comando" && (activeTab === "cmd" || activeTab === "reglas")) {
           if (activeTab === "cmd") loadComandos();
           if (activeTab === "reglas") loadReglas();
@@ -1569,6 +1582,108 @@
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+
+  function starcoolStatusLabel(st) {
+    if (st === "ok") return "POST OK";
+    if (st === "error") return "Error API";
+    if (st === "timeout") return "Timeout RX";
+    if (st === "parse_error") return "Parse";
+    if (st === "send_failed") return "TX falló";
+    if (st === "skip_duplicate") return "Duplicado";
+    return st || "—";
+  }
+
+  function renderStarcoolImei(rows) {
+    if (!els.starcoolUnits) return;
+    els.starcoolUnits.innerHTML = "";
+    for (const row of rows || []) {
+      const div = document.createElement("div");
+      div.className = "saasa-chip";
+      const st = row.status || "—";
+      div.innerHTML =
+        `<strong>${esc(row.i || "—")}</strong>` +
+        `<span class="type-badge st-${esc(st)}">${esc(starcoolStatusLabel(st))}</span>` +
+        `<span class="muted">${esc(row.ts ? formatTs(row.ts) : "sin dato")}</span>` +
+        `<span class="muted">${esc(row.addr || "")}</span>`;
+      els.starcoolUnits.appendChild(div);
+    }
+  }
+
+  function renderStarcool(items, meta) {
+    if (!els.starcoolBody) return;
+    els.starcoolBody.innerHTML = "";
+    const rows = items || [];
+    if (els.emptyStarcool) els.emptyStarcool.classList.toggle("show", rows.length === 0);
+    if (els.starcoolCount) els.starcoolCount.textContent = String(meta && meta.total != null ? meta.total : rows.length);
+    for (const it of rows) {
+      const tr = document.createElement("tr");
+      const payload = it.payload || (it.d02 ? { i: it.i, d01: it.d01 || "METRO", d02: it.d02 } : null);
+      const preview = payload && payload.d02
+        ? String(payload.d02).slice(0, 40) + (payload.d02.length > 40 ? "…" : "")
+        : it.error || "—";
+      const json = payload ? JSON.stringify(payload, null, 2) : it.error || "—";
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+        `<td class="mono">${esc(it.i || "—")}</td>` +
+        `<td><span class="type-badge st-${esc(it.status || "")}">${esc(starcoolStatusLabel(it.status))}</span></td>` +
+        `<td class="mono">${esc(it.http_status != null ? it.http_status : it.error || "—")}</td>` +
+        `<td class="mono muted">${esc(it.addr || it.ip || "—")}</td>` +
+        `<td class="payload-cell"><details><summary>${esc(preview)}</summary><pre>${esc(json)}</pre></details></td>`;
+      els.starcoolBody.appendChild(tr);
+    }
+  }
+
+  async function loadStarcool() {
+    if (els.starcoolMeta) els.starcoolMeta.textContent = "Cargando Starcool…";
+    const p = new URLSearchParams();
+    if (els.starcoolStatus && els.starcoolStatus.value !== "all") p.set("status", els.starcoolStatus.value);
+    p.set("limit", "300");
+    try {
+      const [stR, enR] = await Promise.all([
+        fetch(`${API}/api/starcool/status`),
+        fetch(`${API}/api/starcool/envios?${p}`),
+      ]);
+      const st = await stR.json();
+      const data = await enR.json();
+      renderStarcoolImei(st.last_by_imei || []);
+      renderStarcool(data.items || [], data);
+      const counts = st.counts || {};
+      const parts = Object.keys(counts).map((k) => `${k} ${counts[k]}`);
+      if (els.starcoolMeta) {
+        els.starcoolMeta.textContent =
+          `${st.enabled ? "activo" : "pausado"} · ${st.host || "sin host"} · cada ${st.interval_s}s · TX ${st.tx_hex || ""}` +
+          (st.running ? " · ciclo en curso" : "") +
+          ` · sesiones vivas ${st.live_sessions != null ? st.live_sessions : "—"}` +
+          (st.last_cycle_at ? ` · último ciclo ${formatTs(st.last_cycle_at)}` : "") +
+          (parts.length ? ` · ${parts.join(" · ")}` : "") +
+          (st.last_error ? ` · err ${st.last_error}` : "");
+      }
+    } catch (e) {
+      if (els.starcoolMeta) els.starcoolMeta.textContent = String(e);
+    }
+  }
+
+  if (els.btnRefreshStarcool) els.btnRefreshStarcool.addEventListener("click", loadStarcool);
+  if (els.starcoolStatus) els.starcoolStatus.addEventListener("change", loadStarcool);
+  if (els.btnStarcoolCycle) {
+    els.btnStarcoolCycle.addEventListener("click", async () => {
+      els.btnStarcoolCycle.disabled = true;
+      try {
+        const r = await fetch(`${API}/api/starcool/cycle`, { method: "POST" });
+        const data = await r.json();
+        if (els.starcoolMeta) {
+          els.starcoolMeta.textContent = data.ok
+            ? `ciclo ${data.cycle_id || ""} · sesiones ${data.sessions != null ? data.sessions : "—"}`
+            : data.error || data.detail || "ciclo no iniciado";
+        }
+        await loadStarcool();
+      } catch (e) {
+        if (els.starcoolMeta) els.starcoolMeta.textContent = String(e);
+      } finally {
+        els.btnStarcoolCycle.disabled = false;
+      }
+    });
+  }
 
   const MODE_ES = {
     chilled: "Refrigerado",
@@ -2561,6 +2676,7 @@
   setInterval(refreshHomoQueue, 2000);
   setInterval(() => {
     if (activeTab === "sent") loadSent();
+    if (activeTab === "starcool") loadStarcool();
   }, 4000);
 
   els.btnSweep.addEventListener("click", async () => {
