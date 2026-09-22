@@ -1,23 +1,23 @@
-# TEST_4G — Monitor TCP 9915
+# TEST_4G — Monitor TCP 9921
 
-Puente TCP en **9915**, backend MongoDB, frontend tipo monitor serial (string/hex).
+Puente TCP en **9921**, backend MongoDB, frontend tipo monitor serial (string/hex).
 
 ## Arquitectura
 
 ```
-Dispositivo ──TCP:9915──► tcp_bridge ──HTTP──► backend ──► MongoDB
+Dispositivo ──TCP:9921──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │                  │
-                         HTTP:8086            WS + REST
+                         HTTP:8092            WS + REST
                          (send/list)             │
                                                  ▼
-                                    frontend:8094 (superadmin)
-                                    ztrack:8449   (admin / monitor)
+                                    frontend:8100 (superadmin)
+                                    ztrack:8455   (admin / monitor)
 ```
 
 ## Cumple (contexto.md)
 
-1. `port_cleaner` libera el puerto **9915** al arrancar Compose.
-2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9915)`, `listen(10)`.
+1. `port_cleaner` libera el puerto **9921** al arrancar Compose.
+2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9921)`, `listen(10)`.
 3. Cada `accept()` → hilo `handle_client`.
 4. Al arrancar: `POST /api/internal/disconnect_all`.
 5. Flujo: `register_pending` → `recv(4096)` → buffer → líneas (`\r\n`/`\n`/`\r`) → `parse_chunks` → backend.
@@ -26,7 +26,7 @@ Dispositivo ──TCP:9915──► tcp_bridge ──HTTP──► backend ─�
 
 ## Arranque (Docker)
 
-Esta rama es **`test-tk`** (TCP **9915**). No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913) ni `test-starcool` (9914). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
+Esta rama es **`test_usa_9921`** (TCP **9921**, N=11). No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914) ni `test-tk` (9915). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
 
 ```bash
 docker compose up --build -d
@@ -34,16 +34,16 @@ docker compose up --build -d
 
 | Servicio   | URL / puerto      |
 |------------|-------------------|
-| Ztrack     | http://localhost:8449 |
-| Superadmin | http://localhost:8094 |
-| Backend    | http://localhost:9086 |
-| Bridge HTTP| http://localhost:8086 |
-| TCP equipos| `host:9915`       |
-| MongoDB    | localhost:29022   |
+| Ztrack     | http://localhost:8455 |
+| Superadmin | http://localhost:8100 |
+| Backend    | http://localhost:9092 |
+| Bridge HTTP| http://localhost:8092 |
+| TCP equipos| `host:9921`       |
+| MongoDB    | localhost:29028   |
 
-### Persistencia (MongoDB `test_4g_9915`)
+### Persistencia (MongoDB `test_4g_9921`)
 
-Base y volumen propios de este stack (`mongo_data_9915`). No reutiliza `test_4g`, `test_4g_9911` ni `test_4g_9912`.
+Base y volumen propios de este stack (`mongo_data_9921`). No reutiliza `test_4g`, `test_4g_9911`, `test_4g_9912` ni `test_4g_9915`.
 
 | Colección | Contenido |
 |-----------|-----------|
@@ -53,17 +53,17 @@ Base y volumen propios de este stack (`mongo_data_9915`). No reutiliza `test_4g`
 
 ```bash
 # Sesiones por IP
-curl 'http://localhost:9086/api/sessions?ip=1.2.3.4'
+curl 'http://localhost:9092/api/sessions?ip=1.2.3.4'
 # Mensajes de una IP
-curl 'http://localhost:9086/api/messages?ip=1.2.3.4&limit=100'
+curl 'http://localhost:9092/api/messages?ip=1.2.3.4&limit=100'
 # Histórico
-curl 'http://localhost:9086/api/history?ip=1.2.3.4'
+curl 'http://localhost:9092/api/history?ip=1.2.3.4'
 ```
 
 ## Uso del monitor
 
-1. Abre http://localhost:8094
-2. Los equipos que abran TCP a `:9915` aparecen en la lista (solo conexiones reales).
+1. Abre http://localhost:8100
+2. Los equipos que abran TCP a `:9921` aparecen en la lista (solo conexiones reales).
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.
 
@@ -71,15 +71,15 @@ curl 'http://localhost:9086/api/history?ip=1.2.3.4'
 
 ```bash
 # Dispositivos vivos
-curl http://localhost:8086/devices
+curl http://localhost:8092/devices
 
 # Enviar string
-curl -X POST http://localhost:9086/api/send \
+curl -X POST http://localhost:9092/api/send \
   -H 'Content-Type: application/json' \
   -d '{"ip":"1.2.3.4","message":"AT\r\n","encoding":"string"}'
 
 # Enviar hex
-curl -X POST http://localhost:9086/api/send \
+curl -X POST http://localhost:9092/api/send \
   -H 'Content-Type: application/json' \
   -d '{"addr":"1.2.3.4:54321","message":"48656C6C6F","encoding":"hex"}'
 ```

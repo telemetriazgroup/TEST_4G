@@ -25,7 +25,8 @@ Por qué no se puede “solo cambiar de rama” en la misma carpeta: [multiples_
 | 2 | `test-carne` | 9912 |
 | 3 | `test-usa` | 9913 |
 | 4 | `test-starcool` | 9914 |
-| 5 | `test-tk` | **9915** |
+| 5 | `test-tk` | 9915 |
+| 11 | `test_usa_9921` | **9921** |
 
 Antes de elegir `N`, en el servidor:
 
@@ -54,6 +55,8 @@ No usar **8443** (preview Figma de otro proyecto). El 27017 interno de Mongo **n
 | `MONGO_DB` | `test_4g_<TCP>` | `test_4g` | `test_4g_9911` | `test_4g_9912` | `test_4g_9913` | `test_4g_9914` | `test_4g_9915` |
 | Volumen Compose | `mongo_data_<TCP>` | `mongo_data` | `mongo_data_9911` | `mongo_data_9912` | `mongo_data_9913` | `mongo_data_9914` | `mongo_data_9915` |
 | `CLEAN_PORT` | igual que TCP | 9910 | 9911 | 9912 | 9913 | 9914 | 9915 |
+
+N=11 (`test_usa_9921`): TCP **9921**, bridge **8092**, backend **9092**, serial **8100**, ztrack **8455**, mongo host **29028**, `name: test_4g_usa_9921`, `MONGO_DB=test_4g_9921`, volumen `mongo_data_9921`.
 
 `port_cleaner` solo debe matar contenedores de **ese** TCP, nunca el 9910 si esta rama es 9912.
 
@@ -277,3 +280,24 @@ Haz esto, en orden:
 
 Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
 ```
+
+---
+
+## 11. Rama `test_usa_9921` (TCP 9921) — hecho (N=11)
+
+Fórmula `9910 + 11`. Slug `usa_9921`. No usa 9913 (reservado a `test-usa`).
+
+| Recurso | Valor usa_9921 |
+|---------|----------------|
+| Rama | `test_usa_9921` |
+| `name:` | `test_4g_usa_9921` |
+| TCP | **9921** |
+| Bridge HTTP | 8092 |
+| Backend | http://localhost:9092 |
+| Serial | http://localhost:8100 |
+| Ztrack | http://localhost:8455 |
+| Mongo host | 29028 → 27017 |
+| `MONGO_DB` | `test_4g_9921` |
+| Volumen | `mongo_data_9921` |
+| `CLEAN_PORT` | 9921 |
+| Contenedores | `test_4g_usa_9921-*` |
