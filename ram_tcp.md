@@ -26,6 +26,7 @@ Por qué no se puede “solo cambiar de rama” en la misma carpeta: [multiples_
 | 3 | `test-usa` | 9913 |
 | 4 | `test-starcool` | 9914 |
 | 5 | `test-tk` | 9915 |
+| 6 | `test-gasificado` | **9916** |
 | 11 | `test_usa_9921` | **9921** |
 
 Antes de elegir `N`, en el servidor:
@@ -55,6 +56,8 @@ No usar **8443** (preview Figma de otro proyecto). El 27017 interno de Mongo **n
 | `MONGO_DB` | `test_4g_<TCP>` | `test_4g` | `test_4g_9911` | `test_4g_9912` | `test_4g_9913` | `test_4g_9914` | `test_4g_9915` |
 | Volumen Compose | `mongo_data_<TCP>` | `mongo_data` | `mongo_data_9911` | `mongo_data_9912` | `mongo_data_9913` | `mongo_data_9914` | `mongo_data_9915` |
 | `CLEAN_PORT` | igual que TCP | 9910 | 9911 | 9912 | 9913 | 9914 | 9915 |
+
+N=6 (`test-gasificado`): TCP **9916**, bridge **8087**, backend **9087**, serial **8095**, ztrack **8450**, mongo host **29023**, `name: test_4g_gasificado`, `MONGO_DB=test_4g_9916`, volumen `mongo_data_9916`.
 
 N=11 (`test_usa_9921`): TCP **9921**, bridge **8092**, backend **9092**, serial **8100**, ztrack **8455**, mongo host **29028**, `name: test_4g_usa_9921`, `MONGO_DB=test_4g_9921`, volumen `mongo_data_9921`.
 
@@ -301,3 +304,58 @@ Fórmula `9910 + 11`. Slug `usa_9921`. No usa 9913 (reservado a `test-usa`).
 | Volumen | `mongo_data_9921` |
 | `CLEAN_PORT` | 9921 |
 | Contenedores | `test_4g_usa_9921-*` |
+
+---
+
+## 12. Rama `test-gasificado` (TCP 9916) — hecho (N=6)
+
+Siguiente libre secuencial tras tk 9915: **9916**. Fórmula `9910 + 6`. Slug `gasificado`.
+
+| Recurso | Valor gasificado |
+|---------|------------------|
+| Rama | `test-gasificado` |
+| `name:` | `test_4g_gasificado` |
+| TCP | **9916** |
+| Bridge HTTP | 8087 |
+| Backend | http://localhost:9087 |
+| Serial | http://localhost:8095 |
+| Ztrack | http://localhost:8450 |
+| Mongo host | 29023 → 27017 |
+| `MONGO_DB` | `test_4g_9916` |
+| Volumen | `mongo_data_9916` |
+| `CLEAN_PORT` | 9916 |
+| Contenedores | `test_4g_gasificado-*` |
+
+---
+
+## 13. Prompt listo: `test-gasificado`
+
+```text
+Sigue el protocolo de ram_tcp.md (TEST_4G). No improvises puertos.
+
+Entrada:
+- Rama Git: test-gasificado
+- Slug Compose: gasificado
+- Offset N: 6
+- Rama origen: test_usa_9921
+- TCP: 9916
+
+Haz esto, en orden:
+1. Confirma la carpeta y la rama. Si no existe test-gasificado, créala desde el origen. Si 9916, 8087, 9087, 8095, 8450 o 29023 ya están ocupados, PARA y avisa. No uses 8443.
+2. Estamos en N=6. Deja TODOS los binds/defaults en el mapa gasificado:
+   - name: test_4g_gasificado
+   - TCP 9916, bridge 8087, backend 9087, serial 8095, ztrack 8450, mongo host 29023:27017
+   - MONGO_DB=test_4g_9916
+   - volumen mongo_data_9916
+   - CLEAN_PORT=9916
+   - VITE_SERIAL_URL y links de UI a :8095 y :8450
+   Mongo interno se queda en 27017. No reescribas dumps JSON ni hex 82A7.
+3. Archivos de ram_tcp.md sección 4. docker-compose.yml debe quedar name: test_4g_gasificado.
+4. Actualiza README.md, contexto.md, multiples_puertos.md y la tabla de ram_tcp.md (gasificado = N=6, hecho).
+5. docker compose up -d --build SOLO en esta carpeta. No hagas down de los otros stacks.
+6. Verifica: curl http://localhost:9087/api/health → db test_4g_9916; contenedores test_4g_gasificado-*; ss -lnt | grep 9916; serial :8095 y ztrack :8450 responden.
+7. Al terminar entrega la tabla de puertos gasificado y deja las otras ramas intactas.
+
+Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
+```
+
