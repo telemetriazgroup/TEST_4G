@@ -111,9 +111,9 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 |---------|--------|
 | Proyecto Compose | `test_4g_gasificado` |
 | TCP dispositivo | **9916** |
-| Bridge HTTP | 8087 |
-| Backend | 9087 |
-| Superadmin serial | 8095 |
+| Bridge HTTP | 19800 |
+| Backend | 19700 |
+| Superadmin serial | 19600 |
 | Ztrack | 8450 |
 | Mongo host | 29023 → 27017 |
 | Base Mongo | `test_4g_9916` |
@@ -133,7 +133,9 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9921` |
 | Volumen | `mongo_data_9921` (Compose lo nombra `test_4g_usa_9921_mongo_data_9921`) |
 
-Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916**. USA 9921 → **9921**. Las URLs no se mezclan.
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (HTTP nuevo: serial 19600 / backend 19700 / bridge 19800). USA 9921 → **9921**. Las URLs no se mezclan.
+
+A partir de `test-gasificado`, las ramas **nuevas** ya no usan 8081+N / 9081+N / 8089+N. Usan `19600+K` / `19700+K` / `19800+K` ([ram_tcp.md](./ram_tcp.md) §2b). Lo ya creado se deja en el historial.
 
 En `test-saasa` el `docker-compose.yml` ya lleva `name: test_4g_saasa`. En `test_pollo` hay que poner `name: test_4g_pollo` (si esa rama aún no lo tiene, los contenedores se llaman `test_4g-*` y chocan con cualquier otra carpeta también llamada `TEST_4G`).
 

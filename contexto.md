@@ -9,9 +9,9 @@ Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha c
 | Puerto | Servicio | Función |
 |--------|----------|---------|
 | **9916** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
-| **8087** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
-| **9087** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
-| **8095** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
+| **19800** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
+| **19700** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
+| **19600** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
 | **8450** | `ztrack` (HTTP) | App cliente admin / monitor |
 | **29023** | `mongo` (host → 27017 contenedor) | Persistencia |
 
@@ -72,14 +72,14 @@ Así se evita mostrar “30 conectados” cuando en realidad hay 2.
 
 - Por `addr` (`ip:port`) o por `ip` (sesión más reciente de esa IP).
 - Codificación: `string` o `hex`.
-- Bridge: `POST http://tcp_bridge:8087/send`
+- Bridge: `POST http://tcp_bridge:19800/send`
 - Backend (frontend): `POST /api/send`
 
 ---
 
 ## Monitor web
 
-Interfaz serial en `:8095` y Ztrack en `:8450`. Persistencia de mensajes en MongoDB.
+Interfaz serial en `:19600` y Ztrack en `:8450`. Persistencia de mensajes en MongoDB.
 
 
 

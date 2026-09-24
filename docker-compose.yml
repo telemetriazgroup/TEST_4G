@@ -22,11 +22,11 @@ services:
   backend:
     build: ./backend
     ports:
-      - "9087:9087"
+      - "19700:19700"
     environment:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: test_4g_9916
-      BRIDGE_URL: http://tcp_bridge:8087
+      BRIDGE_URL: http://tcp_bridge:19800
       HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
       HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
       HOMOLOGATE_TIMEOUT_S: ${HOMOLOGATE_TIMEOUT_S:-5}
@@ -43,11 +43,11 @@ services:
     build: ./tcp_bridge
     ports:
       - "9916:9916"
-      - "8087:8087"
+      - "19800:19800"
     environment:
       TCP_PORT: "9916"
-      HTTP_PORT: "8087"
-      BACKEND_URL: http://backend:9087
+      HTTP_PORT: "19800"
+      BACKEND_URL: http://backend:19700
       IDLE_TIMEOUT_S: "300"
       ORPHAN_SWEEP_S: "30"
       FORWARD_LEGACY: "0"
@@ -61,7 +61,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8095:8095"
+      - "19600:19600"
     depends_on:
       - backend
     restart: unless-stopped
@@ -72,7 +72,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ""
-        VITE_SERIAL_URL: http://localhost:8095
+        VITE_SERIAL_URL: http://localhost:19600
     ports:
       - "8450:8450"
     depends_on:
