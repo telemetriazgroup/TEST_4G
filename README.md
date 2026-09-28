@@ -1,23 +1,23 @@
-# TEST_4G — Monitor TCP 9916
+# TEST_4G — Monitor TCP 9913
 
-Puente TCP en **9916**, backend MongoDB, frontend tipo monitor serial (string/hex).
+Puente TCP en **9913**, backend MongoDB, frontend tipo monitor serial (string/hex).
 
 ## Arquitectura
 
 ```
-Dispositivo ──TCP:9916──► tcp_bridge ──HTTP──► backend ──► MongoDB
+Dispositivo ──TCP:9913──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │                  │
-                         HTTP:19800           WS + REST
+                         HTTP:19801           WS + REST
                          (send/list)             │
                                                  ▼
-                                    frontend:19600 (superadmin)
-                                    ztrack:8450    (admin / monitor)
+                                    frontend:19601 (superadmin)
+                                    ztrack:8447    (admin / monitor)
 ```
 
 ## Cumple (contexto.md)
 
-1. `port_cleaner` libera el puerto **9916** al arrancar Compose.
-2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9916)`, `listen(10)`.
+1. `port_cleaner` libera el puerto **9913** al arrancar Compose.
+2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9913)`, `listen(10)`.
 3. Cada `accept()` → hilo `handle_client`.
 4. Al arrancar: `POST /api/internal/disconnect_all`.
 5. Flujo: `register_pending` → `recv(4096)` → buffer → líneas (`\r\n`/`\n`/`\r`) → `parse_chunks` → backend.
@@ -26,7 +26,7 @@ Dispositivo ──TCP:9916──► tcp_bridge ──HTTP──► backend ─�
 
 ## Arranque (Docker)
 
-Esta rama es **`test-gasificado`** (TCP **9916**, N=6, HTTP K=0: serial 19600 / backend 19700 / bridge 19800). No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914), `test-tk` (9915) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
+Esta rama es **`test-usa`** (TCP **9913**, N=3, HTTP K=1: serial 19601 / backend 19701 / bridge 19801). El serial histórico 8092 no se usa: lo ocupa el bridge de `test_usa_9921`. No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-starcool` (9914), `test-tk` (9915), `test-gasificado` (9916) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
 
 ```bash
 docker compose up --build -d
@@ -34,16 +34,16 @@ docker compose up --build -d
 
 | Servicio   | URL / puerto      |
 |------------|-------------------|
-| Ztrack     | http://localhost:8450 |
-| Superadmin | http://localhost:19600 |
-| Backend    | http://localhost:19700 |
-| Bridge HTTP| http://localhost:19800 |
-| TCP equipos| `host:9916`       |
-| MongoDB    | localhost:29023   |
+| Ztrack     | http://localhost:8447 |
+| Superadmin | http://localhost:19601 |
+| Backend    | http://localhost:19701 |
+| Bridge HTTP| http://localhost:19801 |
+| TCP equipos| `host:9913`       |
+| MongoDB    | localhost:29020   |
 
-### Persistencia (MongoDB `test_4g_9916`)
+### Persistencia (MongoDB `test_4g_9913`)
 
-Base y volumen propios de este stack (`mongo_data_9916`). No reutiliza `test_4g`, `test_4g_9911`, `test_4g_9912`, `test_4g_9915` ni `test_4g_9921`.
+Base y volumen propios de este stack (`mongo_data_9913`). No reutiliza `test_4g`, `test_4g_9911`, `test_4g_9912`, `test_4g_9914`, `test_4g_9915`, `test_4g_9916` ni `test_4g_9921`.
 
 | Colección | Contenido |
 |-----------|-----------|
@@ -53,17 +53,17 @@ Base y volumen propios de este stack (`mongo_data_9916`). No reutiliza `test_4g`
 
 ```bash
 # Sesiones por IP
-curl 'http://localhost:19700/api/sessions?ip=1.2.3.4'
+curl 'http://localhost:19701/api/sessions?ip=1.2.3.4'
 # Mensajes de una IP
-curl 'http://localhost:19700/api/messages?ip=1.2.3.4&limit=100'
+curl 'http://localhost:19701/api/messages?ip=1.2.3.4&limit=100'
 # Histórico
-curl 'http://localhost:19700/api/history?ip=1.2.3.4'
+curl 'http://localhost:19701/api/history?ip=1.2.3.4'
 ```
 
 ## Uso del monitor
 
-1. Abre http://localhost:19600
-2. Los equipos que abran TCP a `:9916` aparecen en la lista (solo conexiones reales).
+1. Abre http://localhost:19601
+2. Los equipos que abran TCP a `:9913` aparecen en la lista (solo conexiones reales).
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.
 
@@ -71,15 +71,15 @@ curl 'http://localhost:19700/api/history?ip=1.2.3.4'
 
 ```bash
 # Dispositivos vivos
-curl http://localhost:19800/devices
+curl http://localhost:19801/devices
 
 # Enviar string
-curl -X POST http://localhost:19700/api/send \
+curl -X POST http://localhost:19701/api/send \
   -H 'Content-Type: application/json' \
   -d '{"ip":"1.2.3.4","message":"AT\r\n","encoding":"string"}'
 
 # Enviar hex
-curl -X POST http://localhost:19700/api/send \
+curl -X POST http://localhost:19701/api/send \
   -H 'Content-Type: application/json' \
   -d '{"addr":"1.2.3.4:54321","message":"48656C6C6F","encoding":"hex"}'
 ```

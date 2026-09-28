@@ -62,6 +62,8 @@ No usar **8443** (preview Figma de otro proyecto). El 27017 interno de Mongo **n
 
 N=11 (`test_usa_9921`, histórico): TCP **9921**, bridge **8092**, backend **9092**, serial **8100**, ztrack **8455**, mongo host **29028**, `name: test_4g_usa_9921`, `MONGO_DB=test_4g_9921`, volumen `mongo_data_9921`.
 
+`test-usa` (N=3) **no** usa la columna HTTP histórica de esta tabla (bridge 8084 / backend 9084 / serial 8092). El 8092 ya lo ocupa el bridge de `test_usa_9921`. Quedó en K=1: serial **19601**, backend **19701**, bridge **19801**. TCP **9913**, ztrack **8447**, mongo host **29020**.
+
 `port_cleaner` solo debe matar contenedores de **ese** TCP, nunca el 9910 si esta rama es 9912.
 
 ---
@@ -70,11 +72,11 @@ N=11 (`test_usa_9921`, histórico): TCP **9921**, bridge **8092**, backend **909
 
 Los HTTP `8081+N` / `9081+N` / `8089+N` chocan entre sí (p. ej. bridge N=11 = serial N=3 = 8092). A partir de **esta** rama se usa otra serie. El TCP sigue siendo `9910 + N`. Ztrack y Mongo host siguen `8444 + N` y `29017 + N`.
 
-| Recurso | Fórmula nueva | K=0 gasificado | K=1 (próxima) | K=2 |
-|---------|---------------|----------------|---------------|-----|
-| Superadmin serial | `19600 + K` | **19600** | 19601 | 19602 |
-| Backend | `19700 + K` | **19700** | 19701 | 19702 |
-| Bridge HTTP | `19800 + K` | **19800** | 19801 | 19802 |
+| Recurso | Fórmula nueva | K=0 gasificado | K=1 usa | K=2 (próxima) |
+|---------|---------------|----------------|----------|----------------|
+| Superadmin serial | `19600 + K` | **19600** | **19601** | 19602 |
+| Backend | `19700 + K` | **19700** | **19701** | 19702 |
+| Bridge HTTP | `19800 + K` | **19800** | **19801** | 19802 |
 
 | Recurso (sin cambio de serie) | Fórmula | Gasificado (N=6, K=0) |
 |-------------------------------|---------|------------------------|
@@ -86,7 +88,7 @@ Los HTTP `8081+N` / `9081+N` / `8089+N` chocan entre sí (p. ej. bridge N=11 = s
 Reglas:
 
 1. Ramas **ya creadas** (pollo 9910 … tk 9915, usa_9921) **se quedan** con su HTTP histórico de la sección 2.
-2. `test-gasificado` es **K=0**. Cada rama **nueva** después de esta toma el siguiente `K` libre.
+2. `test-gasificado` es **K=0**. `test-usa` es **K=1**. Cada rama **nueva** después de esta toma el siguiente `K` libre.
 3. No volver a usar 8081–8100 / 9081–9092 para HTTP de ramas nuevas.
 
 ---
@@ -386,4 +388,25 @@ Haz esto, en orden:
 
 Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
 ```
+
+---
+
+## 14. Rama `test-usa` (TCP 9913) — hecho (N=3, K=1)
+
+TCP reservado **9913** estaba libre. El HTTP histórico (bridge 8084 / backend 9084 / serial 8092) no se aplicó: el **8092** ya lo publica el bridge de `test_usa_9921`. Siguiente K libre tras gasificado (K=0): **K=1**. Origen: `test-gasificado`. Carpeta: `/home/telemetriazgroup/Proyectos/usa/TEST_4G`. Slug `usa`.
+
+| Recurso | Valor usa |
+|---------|-----------|
+| Rama | `test-usa` |
+| `name:` | `test_4g_usa` |
+| TCP | **9913** |
+| Bridge HTTP | **19801** |
+| Backend | http://localhost:19701 |
+| Serial | http://localhost:19601 |
+| Ztrack | http://localhost:8447 |
+| Mongo host | 29020 → 27017 |
+| `MONGO_DB` | `test_4g_9913` |
+| Volumen | `mongo_data_9913` |
+| `CLEAN_PORT` | 9913 |
+| Contenedores | `test_4g_usa-*` |
 

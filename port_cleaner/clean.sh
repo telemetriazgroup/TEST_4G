@@ -1,6 +1,6 @@
 #!/bin/sh
-# Libera el puerto TCP 9916 deteniendo contenedores que lo publiquen.
-PORT="${CLEAN_PORT:-9916}"
+# Libera el puerto TCP 9913 deteniendo contenedores que lo publiquen.
+PORT="${CLEAN_PORT:-9913}"
 echo "[port_cleaner] buscando contenedores en puerto ${PORT}…"
 
 docker ps --format '{{.ID}} {{.Ports}}' | while read -r cid ports; do

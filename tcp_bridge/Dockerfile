@@ -5,5 +5,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY bridge.py .
 
-EXPOSE 9916 19800
+EXPOSE 9913 19801
 CMD ["python", "-u", "bridge.py"]

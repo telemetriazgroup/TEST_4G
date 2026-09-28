@@ -1,5 +1,5 @@
 """
-Backend REST + WebSocket para el monitor serial TCP (puerto 9916).
+Backend REST + WebSocket para el monitor serial TCP (puerto 9913).
 
 Persistencia:
 - sessions  → sesión por IP (activa / histórica)
@@ -33,8 +33,8 @@ import homologate as homo
 import reglas as regl
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
-MONGO_DB = os.getenv("MONGO_DB", "test_4g_9916")
-BRIDGE_URL = os.getenv("BRIDGE_URL", "http://tcp_bridge:19800").rstrip("/")
+MONGO_DB = os.getenv("MONGO_DB", "test_4g_9913")
+BRIDGE_URL = os.getenv("BRIDGE_URL", "http://tcp_bridge:19801").rstrip("/")
 
 app = FastAPI(title="TEST_4G Backend", version="1.1.0")
 app.add_middleware(

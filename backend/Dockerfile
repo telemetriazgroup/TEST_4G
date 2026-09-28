@@ -7,5 +7,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py homologate.py decode_tk.py decode_rs.py comandos.py reglas.py client_api.py .
 
-EXPOSE 19700
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "19700"]
+EXPOSE 19701
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "19701"]

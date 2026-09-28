@@ -9,7 +9,7 @@ Hoy:
 | `test_pollo` | `.../TEST_4G` (pollo / pollitos) | Interfaz y datos de pollo BB |
 | `test-saasa` | otra `.../TEST_4G` (saasa) | Interfaz y datos de esa línea |
 | `test-carne` | otra carpeta (carne) | TCP **9912** — [ram_tcp.md](./ram_tcp.md) §7–8 |
-| `test-usa` | otra carpeta (usa) | TCP **9913** |
+| `test-usa` | `/home/telemetriazgroup/Proyectos/usa/TEST_4G` | TCP **9913**, HTTP K=1 — [ram_tcp.md](./ram_tcp.md) §14 |
 | `test-starcool` | otra carpeta (starcool) | TCP **9914** |
 | `test-tk` | otra carpeta (tk) | TCP **9915** — [ram_tcp.md](./ram_tcp.md) §9–10 |
 | `test-gasificado` | otra carpeta (gasificado) | TCP **9916** — [ram_tcp.md](./ram_tcp.md) §12–13 |
@@ -63,19 +63,21 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9912` |
 | Volumen | `mongo_data_9912` (Compose lo nombra `test_4g_carne_mongo_data_9912`) |
 
-### `test-usa` — TCP 9913
+### `test-usa` — TCP 9913 (esta rama, N=3, K=1)
+
+El HTTP histórico 8084 / 9084 / 8092 no se usa: el 8092 ya lo publica el bridge de `test_usa_9921`.
 
 | Recurso | Valor |
 |---------|--------|
 | Proyecto Compose | `test_4g_usa` |
 | TCP dispositivo | **9913** |
-| Bridge HTTP | 8084 |
-| Backend | 9084 |
-| Superadmin serial | 8092 |
+| Bridge HTTP | 19801 |
+| Backend | 19701 |
+| Superadmin serial | 19601 |
 | Ztrack | 8447 |
 | Mongo host | 29020 → 27017 |
 | Base Mongo | `test_4g_9913` |
-| Volumen | `mongo_data_9913` |
+| Volumen | `mongo_data_9913` (Compose lo nombra `test_4g_usa_mongo_data_9913`) |
 
 ### `test-starcool` — TCP 9914
 
@@ -105,7 +107,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9915` |
 | Volumen | `mongo_data_9915` (Compose lo nombra `test_4g_tk_mongo_data_9915`) |
 
-### `test-gasificado` — TCP 9916 (esta rama)
+### `test-gasificado` — TCP 9916 (K=0)
 
 | Recurso | Valor |
 |---------|--------|
@@ -133,9 +135,9 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9921` |
 | Volumen | `mongo_data_9921` (Compose lo nombra `test_4g_usa_9921_mongo_data_9921`) |
 
-Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (HTTP nuevo: serial 19600 / backend 19700 / bridge 19800). USA 9921 → **9921**. Las URLs no se mezclan.
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913** (HTTP K=1: serial 19601 / backend 19701 / bridge 19801). Starcool → **9914**. TK → **9915**. Gasificado → **9916** (HTTP K=0: serial 19600 / backend 19700 / bridge 19800). USA 9921 → **9921**. Las URLs no se mezclan.
 
-A partir de `test-gasificado`, las ramas **nuevas** ya no usan 8081+N / 9081+N / 8089+N. Usan `19600+K` / `19700+K` / `19800+K` ([ram_tcp.md](./ram_tcp.md) §2b). Lo ya creado se deja en el historial.
+A partir de `test-gasificado`, las ramas **nuevas** ya no usan 8081+N / 9081+N / 8089+N. Usan `19600+K` / `19700+K` / `19800+K` ([ram_tcp.md](./ram_tcp.md) §2b). Lo ya creado se deja en el historial. `test-usa` entra en esa serie (K=1) porque el serial histórico 8092 choca con el bridge de `test_usa_9921`.
 
 En `test-saasa` el `docker-compose.yml` ya lleva `name: test_4g_saasa`. En `test_pollo` hay que poner `name: test_4g_pollo` (si esa rama aún no lo tiene, los contenedores se llaman `test_4g-*` y chocan con cualquier otra carpeta también llamada `TEST_4G`).
 
