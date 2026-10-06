@@ -259,9 +259,11 @@
             <option value="csv">CSV</option>
           </select>
         </div>
+        <button type="button" id="btnProcessArchive" class="btn primary">Procesar histórico</button>
         <button type="button" id="btnExportArchive" class="btn primary">Descargar día</button>
         <button type="button" id="btnRefreshArchive" class="btn ghost">Cargar día</button>
       </div>
+      <p id="archiveExportMeta" class="hint">Procesar histórico recorre todos los días del archivo y descarga el JSON para Mongo.</p>
 
       <div class="archive-layout">
         <aside class="day-list-wrap">

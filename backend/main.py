@@ -1340,21 +1340,30 @@ async def homologate_status(limit: int = 20):
 
 
 @app.get("/api/homologate/export")
-async def homologate_export():
-    """Recorre messages y arma el JSON de carga (varios días y horas)."""
+async def homologate_export(addr: str | None = None, ip: str | None = None):
+    """Recorre el archivo (messages), todos los días, y arma el JSON de carga."""
     q: dict[str, Any] = {
         "direction": "rx",
         "value_type": {"$ne": "tcp_header"},
-        "text": {"$regex": "82A700", "$options": "i"},
+        "$or": [
+            {"text": {"$regex": "82A700", "$options": "i"}},
+            {"ascii": {"$regex": "82A700", "$options": "i"}},
+        ],
     }
+    if addr:
+        q["addr"] = addr
+    elif ip:
+        q["ip"] = ip
     cursor = db.messages.find(
         q,
-        {"_id": 0, "text": 1, "direction": 1, "value_type": 1, "ts": 1},
+        {"_id": 0, "text": 1, "ascii": 1, "direction": 1, "value_type": 1, "ts": 1},
     ).sort("ts", 1)
     docs: list[dict[str, Any]] = []
     scanned = 0
     async for doc in cursor:
         scanned += 1
+        if not doc.get("text") and doc.get("ascii"):
+            doc["text"] = doc["ascii"]
         classified = homo.classify_frame(doc)
         if classified["status"] != "ready" or not classified.get("payload"):
             continue
@@ -1363,14 +1372,19 @@ async def homologate_export():
             docs.append(item)
     desde = docs[0]["fecha"]["$date"] if docs else None
     hasta = docs[-1]["fecha"]["$date"] if docs else None
+    day_keys = sorted({str(d["fecha"]["$date"])[:10] for d in docs})
     return {
         "count": len(docs),
         "scanned": scanned,
+        "days": len(day_keys),
+        "day_from": day_keys[0] if day_keys else None,
+        "day_to": day_keys[-1] if day_keys else None,
         "desde": desde,
         "hasta": hasta,
         "desde_local": homo.local_stamp(desde),
         "hasta_local": homo.local_stamp(hasta),
         "tz": "America/Lima",
+        "addr": addr,
         "docs": docs,
     }
 

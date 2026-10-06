@@ -294,6 +294,8 @@
     btnArchiveNext: document.getElementById("btnArchiveNext"),
     btnRefreshArchive: document.getElementById("btnRefreshArchive"),
     btnExportArchive: document.getElementById("btnExportArchive"),
+    btnProcessArchive: document.getElementById("btnProcessArchive"),
+    archiveExportMeta: document.getElementById("archiveExportMeta"),
     archiveExportKind: document.getElementById("archiveExportKind"),
     archiveDir: document.getElementById("archiveDir"),
     archiveType: document.getElementById("archiveType"),
@@ -1569,13 +1571,15 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
-  async function exportHistorico() {
-    const btn = els.btnExportHistorico;
-    const meta = els.exportHistoricoMeta;
-    if (btn) btn.disabled = true;
-    if (meta) meta.textContent = "Procesando histórico…";
+  async function exportHistorico(metaEl) {
+    const meta = metaEl || els.exportHistoricoMeta || els.archiveExportMeta;
+    const buttons = [els.btnExportHistorico, els.btnProcessArchive].filter(Boolean);
+    buttons.forEach((b) => { b.disabled = true; });
+    if (meta) meta.textContent = "Procesando todos los días del archivo…";
     try {
-      const r = await fetch(`${API}/api/homologate/export`);
+      const p = new URLSearchParams();
+      if (selected && selected.addr) p.set("addr", selected.addr);
+      const r = await fetch(`${API}/api/homologate/export?${p.toString()}`);
       const data = await r.json();
       if (!r.ok) {
         if (meta) meta.textContent = data.detail || "No se pudo procesar el histórico";
@@ -1583,31 +1587,36 @@
       }
       const n = data.count || 0;
       if (!n) {
-        if (meta) meta.textContent = "0 tramas homologables en el histórico. No se generó archivo.";
+        if (meta) meta.textContent = "0 tramas homologables en el archivo. No se generó archivo.";
         return;
       }
-      const desde = data.desde_local || data.desde || "—";
-      const hasta = data.hasta_local || data.hasta || "—";
-      const fileFrom = String(data.desde || "").slice(0, 10) || "desde";
-      const fileTo = String(data.hasta || "").slice(0, 10) || "hasta";
+      const fileFrom = data.day_from || String(data.desde || "").slice(0, 10) || "desde";
+      const fileTo = data.day_to || String(data.hasta || "").slice(0, 10) || "hasta";
       downloadText(
         JSON.stringify(data.docs || [], null, 2) + "\n",
         `carga_mongo_${fileFrom}_${fileTo}.json`,
         "application/json"
       );
+      const who = selected && selected.addr ? ` · ${selected.addr}` : "";
       if (meta) {
         meta.textContent =
-          `${n} tramas homologables · ${desde} → ${hasta} (${data.tz || "America/Lima"})` +
-          ` · UTC ${data.desde} → ${data.hasta}. Archivo descargado.`;
+          `${n} tramas homologables · ${data.days || 1} día(s) · ${fileFrom} → ${fileTo}` +
+          ` · ${data.desde_local || "—"} → ${data.hasta_local || "—"} (${data.tz || "America/Lima"})` +
+          `${who}. Archivo descargado para Mongo.`;
       }
     } catch (e) {
       if (meta) meta.textContent = String(e);
     } finally {
-      if (btn) btn.disabled = false;
+      buttons.forEach((b) => { b.disabled = false; });
     }
   }
 
-  if (els.btnExportHistorico) els.btnExportHistorico.addEventListener("click", exportHistorico);
+  if (els.btnExportHistorico) {
+    els.btnExportHistorico.addEventListener("click", () => exportHistorico(els.exportHistoricoMeta));
+  }
+  if (els.btnProcessArchive) {
+    els.btnProcessArchive.addEventListener("click", () => exportHistorico(els.archiveExportMeta));
+  }
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
