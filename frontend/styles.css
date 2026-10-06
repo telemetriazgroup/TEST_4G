@@ -919,6 +919,18 @@ body.is-client .layout { display: none; }
   white-space: nowrap;
 }
 
+.export-progress {
+  flex-shrink: 0;
+  margin: 0.35rem 0.85rem 0.15rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: #e7f3f1;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+
 .hint {
   flex-shrink: 0;
   margin: 0 0.85rem 0.55rem;

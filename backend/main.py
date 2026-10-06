@@ -1340,8 +1340,12 @@ async def homologate_status(limit: int = 20):
 
 
 @app.get("/api/homologate/export")
-async def homologate_export(addr: str | None = None, ip: str | None = None):
-    """Recorre el archivo (messages), todos los días, y arma el JSON de carga."""
+async def homologate_export(
+    addr: str | None = None,
+    ip: str | None = None,
+    date: str | None = None,
+):
+    """Un día del archivo (o todo) convertido al JSON de carga de Mongo."""
     q: dict[str, Any] = {
         "direction": "rx",
         "value_type": {"$ne": "tcp_header"},
@@ -1354,6 +1358,14 @@ async def homologate_export(addr: str | None = None, ip: str | None = None):
         q["addr"] = addr
     elif ip:
         q["ip"] = ip
+    if date:
+        if len(date) != 10 or date[4] != "-" or date[7] != "-":
+            raise HTTPException(400, "date debe ser YYYY-MM-DD")
+        try:
+            nxt = (datetime.fromisoformat(date) + timedelta(days=1)).date().isoformat()
+        except ValueError as e:
+            raise HTTPException(400, "date debe ser YYYY-MM-DD") from e
+        q["ts"] = {"$gte": date, "$lt": nxt}
     cursor = db.messages.find(
         q,
         {"_id": 0, "text": 1, "ascii": 1, "direction": 1, "value_type": 1, "ts": 1},

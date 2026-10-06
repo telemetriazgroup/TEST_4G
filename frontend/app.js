@@ -295,6 +295,7 @@
     btnRefreshArchive: document.getElementById("btnRefreshArchive"),
     btnExportArchive: document.getElementById("btnExportArchive"),
     btnProcessArchive: document.getElementById("btnProcessArchive"),
+    btnDownloadCarga: document.getElementById("btnDownloadCarga"),
     archiveExportMeta: document.getElementById("archiveExportMeta"),
     archiveExportKind: document.getElementById("archiveExportKind"),
     archiveDir: document.getElementById("archiveDir"),
@@ -1571,46 +1572,93 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
+  let cargaDocs = [];
+  let cargaFilename = "carga_mongo.json";
+
+  function saveCargaFile() {
+    if (!cargaDocs.length) return;
+    downloadText(
+      JSON.stringify(cargaDocs, null, 2) + "\n",
+      cargaFilename,
+      "application/json"
+    );
+  }
+
   async function exportHistorico(metaEl) {
-    const meta = metaEl || els.exportHistoricoMeta || els.archiveExportMeta;
+    const meta = metaEl || els.archiveExportMeta || els.exportHistoricoMeta;
     const buttons = [els.btnExportHistorico, els.btnProcessArchive].filter(Boolean);
+    const processBtn = els.btnProcessArchive;
     buttons.forEach((b) => { b.disabled = true; });
-    if (meta) meta.textContent = "Procesando todos los días del archivo…";
+    if (els.btnDownloadCarga) els.btnDownloadCarga.hidden = true;
+    cargaDocs = [];
     try {
-      const p = new URLSearchParams();
-      if (selected && selected.addr) p.set("addr", selected.addr);
-      const r = await fetch(`${API}/api/homologate/export?${p.toString()}`);
-      const data = await r.json();
-      if (!r.ok) {
-        if (meta) meta.textContent = data.detail || "No se pudo procesar el histórico";
+      if (meta) meta.textContent = "Buscando días del archivo…";
+      if (processBtn) processBtn.textContent = "Buscando días…";
+      const daysRes = await fetch(`${API}/api/history/days?limit=1000`);
+      const daysData = await daysRes.json();
+      if (!daysRes.ok) {
+        if (meta) meta.textContent = daysData.detail || "No se pudo leer los días del archivo";
         return;
       }
-      const n = data.count || 0;
-      if (!n) {
-        if (meta) meta.textContent = "0 tramas homologables en el archivo. No se generó archivo.";
+      const days = (daysData.days || [])
+        .map((d) => d.date)
+        .filter(Boolean)
+        .sort();
+      if (!days.length) {
+        if (meta) meta.textContent = "No hay días guardados en el archivo.";
         return;
       }
-      const fileFrom = data.day_from || String(data.desde || "").slice(0, 10) || "desde";
-      const fileTo = data.day_to || String(data.hasta || "").slice(0, 10) || "hasta";
-      downloadText(
-        JSON.stringify(data.docs || [], null, 2) + "\n",
-        `carga_mongo_${fileFrom}_${fileTo}.json`,
-        "application/json"
-      );
-      const who = selected && selected.addr ? ` · ${selected.addr}` : "";
+      for (let i = 0; i < days.length; i++) {
+        const day = days[i];
+        const step = `${i + 1}/${days.length}`;
+        if (processBtn) processBtn.textContent = `${step} · ${cargaDocs.length}`;
+        if (meta) {
+          meta.textContent =
+            `Analizando día ${step} · ${day} · ${cargaDocs.length} tramas acumuladas (fecha UTC, estado 1)…`;
+        }
+        const r = await fetch(`${API}/api/homologate/export?date=${encodeURIComponent(day)}`);
+        const data = await r.json();
+        if (!r.ok) {
+          if (meta) meta.textContent = data.detail || `Error al analizar ${day}`;
+          return;
+        }
+        for (const doc of data.docs || []) cargaDocs.push(doc);
+        if (meta) {
+          meta.textContent =
+            `Día ${step} listo · ${day} · ${cargaDocs.length} tramas acumuladas`;
+        }
+      }
+      if (!cargaDocs.length) {
+        if (meta) {
+          meta.textContent =
+            `0 tramas homologables en ${days.length} día(s) (${days[0]} → ${days[days.length - 1]}). No se generó archivo.`;
+        }
+        return;
+      }
+      const fileFrom = String(cargaDocs[0].fecha && cargaDocs[0].fecha.$date || days[0]).slice(0, 10);
+      const fileTo = String(
+        cargaDocs[cargaDocs.length - 1].fecha && cargaDocs[cargaDocs.length - 1].fecha.$date || days[days.length - 1]
+      ).slice(0, 10);
+      cargaFilename = `carga_mongo_${fileFrom}_${fileTo}.json`;
+      saveCargaFile();
+      if (els.btnDownloadCarga) {
+        els.btnDownloadCarga.hidden = false;
+        els.btnDownloadCarga.textContent = `Descargar JSON (${cargaDocs.length})`;
+      }
       if (meta) {
         meta.textContent =
-          `${n} tramas homologables · ${data.days || 1} día(s) · ${fileFrom} → ${fileTo}` +
-          ` · ${data.desde_local || "—"} → ${data.hasta_local || "—"} (${data.tz || "America/Lima"})` +
-          `${who}. Archivo descargado para Mongo.`;
+          `${cargaDocs.length} tramas homologables · ${days.length} día(s) · ${fileFrom} → ${fileTo}. ` +
+          `Archivo ${cargaFilename} listo para Mongo (fecha UTC, estado 1).`;
       }
     } catch (e) {
       if (meta) meta.textContent = String(e);
     } finally {
       buttons.forEach((b) => { b.disabled = false; });
+      if (processBtn) processBtn.textContent = "Procesar histórico";
     }
   }
 
+  if (els.btnDownloadCarga) els.btnDownloadCarga.addEventListener("click", saveCargaFile);
   if (els.btnExportHistorico) {
     els.btnExportHistorico.addEventListener("click", () => exportHistorico(els.exportHistoricoMeta));
   }
