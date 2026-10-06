@@ -490,7 +490,7 @@ async def internal_telemetry(body: TelemetryBody):
 
 
 # ---------------------------------------------------------------------------
-# Homologación POLLO → POST estándar (no bloquea el socket)
+# Homologación madurador → POST TermoKing (no bloquea el socket)
 # ---------------------------------------------------------------------------
 
 async def _mark_message(doc: dict[str, Any], fields: dict[str, Any]) -> None:

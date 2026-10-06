@@ -38,7 +38,7 @@ ESO QUIERE DECIR QUE LA TRAMA A ENVIAR como EStandar en este caso seria :
 
 }
 
-y asi se debe enviara a la trama si esta configurada y si se comprobo que se recepciona cada vez que llega tramas de los puertos d efroma uatoamtica el sistema debe construir la trama estandar y enviara por el post al link configurado 
+y asi se debe enviara a la trama si esta configurada y si se comprobo que se recepciona cada vez que llega tramas de los puertos d efroma automatica  el sistema debe construir la trama estandar y enviara por el post al link configurado 
 
 
 decodificador interno  
@@ -85,6 +85,8 @@ B02040000  ->
 
 
 {"i":"POLLO_BEBE","d01":"1B0204000082A700F800FE7F0601EA007401EF01FF7F0401080109010A010D014700FE7FFE7FFE7FC5013C00360034003800FE7FFE7F3C00010029032E0F00009A020000456B0B00FE7FFE7FF6000601FE7F0000CC002000FE7FFF7FFE7FFE7FA6AD1B04","d02":"1B0204000082A7010100C4090F000304014B02FE7FFE7FFE7F1E000807030000FFFFFFFF25C21B04","d03":"1B0204000082A70200000001000101000000010000000000000000000000000101014E561B04","d04":"1B0204000082A7034C4F535531393638313030ABF51B04","d05":"1B0204000082A70601003900FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFB3BB1B04"}{"i":"POLLO_BEBE","rs":"MP5000_GET_INFO"}
+
+
 
 
 

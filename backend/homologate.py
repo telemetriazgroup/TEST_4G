@@ -1,5 +1,8 @@
 """
-Homologación POLLO → JSON estándar (datos_homologar.md).
+Homologación madurador (rama test-carne) → JSON TermoKing.
+
+Fase actual (logica_madurador_carne.md): i, d1←d01/82A700, d2←d02/82A701,
+d3 y d4 fijos. d03–d05 no salen todavía.
 
 Parseo puro, sin I/O. El envío HTTP vive en main.py para no bloquear el socket 9912.
 """
@@ -22,6 +25,9 @@ OP_CAPTION = "82A703"
 OP_ALARM = "82A706"
 OPS_STANDARD = (OP_SENSOR, OP_CONTROL, OP_ALARM)
 D0X_RE = re.compile(r"^d\d{2}$", re.IGNORECASE)
+# Constantes de esta fase. No se leen del equipo.
+D3_STATIC = "1 32516 1051 0 0 0 0.0"
+D4_STATIC = "UNIT111"
 
 
 def env_enabled() -> bool:
@@ -174,27 +180,33 @@ def payload_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def named_hex(obj: dict[str, Any], name: str) -> str:
+    """Hex de un campo por nombre (d01, d02). No busca el opcode en otro d0x."""
+    want = name.lower()
+    for key, value in obj.items():
+        if isinstance(key, str) and key.lower() == want and isinstance(value, str):
+            return normalize_hex(value)
+    return ""
+
+
 def build_standard(obj: dict[str, Any], unit: str | None = None) -> dict[str, Any] | None:
+    """Arma el JSON de esta fase. Sin d1 y d2 no hay envío."""
     ident = obj.get("i")
     if ident is None or str(ident).strip() == "":
         return None
     if not has_d0x(obj):
         return None
-    ops = index_opcodes(obj)
-    sensor = ops.get(OP_SENSOR)
-    control = ops.get(OP_CONTROL)
-    if not sensor or not control:
+    sensor = named_hex(obj, "d01")
+    control = named_hex(obj, "d02")
+    if OP_SENSOR not in sensor or OP_CONTROL not in control:
         return None
-    payload: dict[str, Any] = {
+    return {
         "i": str(ident),
-        "d01": unit or env_unit(),
-        "d02": sensor,
-        "d03": control,
+        "d1": sensor,
+        "d2": control,
+        "d3": D3_STATIC,
+        "d4": unit or D4_STATIC,
     }
-    alarm = ops.get(OP_ALARM)
-    if alarm:
-        payload["d08"] = alarm
-    return payload
 
 
 def classify_frame(doc: dict[str, Any]) -> dict[str, Any]:

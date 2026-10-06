@@ -1525,8 +1525,9 @@
     for (const it of rows) {
       const tr = document.createElement("tr");
       const payload = it.payload || {};
-      const preview = payload.d02
-        ? String(payload.d02).slice(0, 48) + (payload.d02.length > 48 ? "…" : "")
+      const hexPreview = payload.d1 || payload.d2 || "";
+      const preview = hexPreview
+        ? String(hexPreview).slice(0, 48) + (String(hexPreview).length > 48 ? "…" : "")
         : "";
       const json = payload.i
         ? JSON.stringify(payload, null, 2)

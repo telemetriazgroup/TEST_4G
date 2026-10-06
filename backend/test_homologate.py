@@ -1,6 +1,21 @@
-"""Criterios de aceptación de datos_homologar.md (sin Mongo / HTTP)."""
+"""Equivalencia madurador fase actual (logica_madurador_carne.md), sin Mongo / HTTP."""
 
-from homologate import build_standard, classify_frame, date_key, hour_key, split_json_objects
+from homologate import D3_STATIC, D4_STATIC, build_standard, classify_frame, date_key, hour_key, split_json_objects
+
+MAD_D01 = (
+    "1B0204000082A7009600FE7FA20088008F018C02FF7FFF009E00A1009C009D005000FE7FFE7FFE7F"
+    "B3013C0052004F005600FE7FFE7F1E0033002D03E33200004432000026180D00FE7FFE7F9600A200"
+    "FE7F0000F6011C02FE7FFF7FFE7FFE7FD9411B04"
+)
+MAD_D02 = "1B0204000082A7010100DC052B000300014E00FE7FFE7FFE7FFE7F0807060000FFFFFFFFB0E61B04"
+MAD_FRAME = (
+    '{"i":"MAD_CARNE","rs":"MP5000_GET_DATA"}'
+    '{"i":"MAD_CARNE","d01":"' + MAD_D01 + '","d02":"' + MAD_D02 + '",'
+    '"d03":"1B0204000082A702000000010101000100010000000000000000000000000001010170E41B04",'
+    '"d04":"1B0204000082A7034C4F535531393935323730374D1B04",'
+    '"d05":"1B0204000082A70601003900FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFB3BB1B04"}'
+    '{"i":"MAD_CARNE","rs":"RELE001_DATA:0 0 0 0 0 0 0 1,0,0.0"}'
+)
 
 SAMPLE_CONCAT = (
     '{"i":"POLLO_BEBE","d01":"1B0204000082A700F600FE7FEB00FB00F200EA00FF7FEF00EF00F000F000F0004300'
@@ -28,19 +43,32 @@ def test_split_concat_does_not_post_rs():
     assert objs[1].get("rs") == "MP5000_GET_INFO"
 
 
-def test_forma_a_standard_payload():
+def test_madurador_maps_d1_d2_and_static():
     classified = classify_frame(
-        {"direction": "rx", "value_type": "hex", "text": SAMPLE_CONCAT}
+        {"direction": "rx", "value_type": "hex", "text": MAD_FRAME}
     )
     assert classified["status"] == "ready"
     p = classified["payload"]
-    assert p["i"] == "POLLO_BEBE"
-    assert p["d01"] == "UNIT111"
-    assert "82A700" in p["d02"]
-    assert "82A701" in p["d03"]
-    assert "82A706" in p["d08"]
-    assert "82A702" not in p.get("d02", "")
-    assert list(p.keys()) == ["i", "d01", "d02", "d03", "d08"]
+    assert p == {
+        "i": "MAD_CARNE",
+        "d1": MAD_D01,
+        "d2": MAD_D02,
+        "d3": D3_STATIC,
+        "d4": D4_STATIC,
+    }
+    assert "82A702" not in p["d1"]
+    assert "82A706" not in "".join(p.values())
+    assert list(p.keys()) == ["i", "d1", "d2", "d3", "d4"]
+
+
+def test_opcode_in_other_field_does_not_fill_d1():
+    """82A700 en d02 no cuenta como d1: el nombre del campo manda."""
+    swapped = (
+        '{"i":"MAD_CARNE","d01":"' + MAD_D02 + '","d02":"' + MAD_D01 + '"}'
+    )
+    assert build_standard(split_json_objects(swapped)[0]) is None
+    classified = classify_frame({"direction": "rx", "value_type": "hex", "text": swapped})
+    assert classified["status"] == "incomplete"
 
 
 def test_rs_and_header_skipped():
@@ -82,7 +110,8 @@ def test_hour_key_lima():
 
 if __name__ == "__main__":
     test_split_concat_does_not_post_rs()
-    test_forma_a_standard_payload()
+    test_madurador_maps_d1_d2_and_static()
+    test_opcode_in_other_field_does_not_fill_d1()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
     test_hour_key_lima()
