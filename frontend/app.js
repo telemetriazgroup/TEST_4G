@@ -310,6 +310,8 @@
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
+    btnExportHistorico: document.getElementById("btnExportHistorico"),
+    exportHistoricoMeta: document.getElementById("exportHistoricoMeta"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
     statusKpis: document.getElementById("statusKpis"),
@@ -1567,6 +1569,45 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
+  async function exportHistorico() {
+    const btn = els.btnExportHistorico;
+    const meta = els.exportHistoricoMeta;
+    if (btn) btn.disabled = true;
+    if (meta) meta.textContent = "Procesando histórico…";
+    try {
+      const r = await fetch(`${API}/api/homologate/export`);
+      const data = await r.json();
+      if (!r.ok) {
+        if (meta) meta.textContent = data.detail || "No se pudo procesar el histórico";
+        return;
+      }
+      const n = data.count || 0;
+      if (!n) {
+        if (meta) meta.textContent = "0 tramas homologables en el histórico. No se generó archivo.";
+        return;
+      }
+      const desde = data.desde_local || data.desde || "—";
+      const hasta = data.hasta_local || data.hasta || "—";
+      const fileFrom = String(data.desde || "").slice(0, 10) || "desde";
+      const fileTo = String(data.hasta || "").slice(0, 10) || "hasta";
+      downloadText(
+        JSON.stringify(data.docs || [], null, 2) + "\n",
+        `carga_mongo_${fileFrom}_${fileTo}.json`,
+        "application/json"
+      );
+      if (meta) {
+        meta.textContent =
+          `${n} tramas homologables · ${desde} → ${hasta} (${data.tz || "America/Lima"})` +
+          ` · UTC ${data.desde} → ${data.hasta}. Archivo descargado.`;
+      }
+    } catch (e) {
+      if (meta) meta.textContent = String(e);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  if (els.btnExportHistorico) els.btnExportHistorico.addEventListener("click", exportHistorico);
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);

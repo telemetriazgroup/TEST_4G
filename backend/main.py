@@ -1339,6 +1339,42 @@ async def homologate_status(limit: int = 20):
     }
 
 
+@app.get("/api/homologate/export")
+async def homologate_export():
+    """Recorre messages y arma el JSON de carga (varios días y horas)."""
+    q: dict[str, Any] = {
+        "direction": "rx",
+        "value_type": {"$ne": "tcp_header"},
+        "text": {"$regex": "82A700", "$options": "i"},
+    }
+    cursor = db.messages.find(
+        q,
+        {"_id": 0, "text": 1, "direction": 1, "value_type": 1, "ts": 1},
+    ).sort("ts", 1)
+    docs: list[dict[str, Any]] = []
+    scanned = 0
+    async for doc in cursor:
+        scanned += 1
+        classified = homo.classify_frame(doc)
+        if classified["status"] != "ready" or not classified.get("payload"):
+            continue
+        item = homo.mongo_load_doc(classified["payload"], doc.get("ts"))
+        if item:
+            docs.append(item)
+    desde = docs[0]["fecha"]["$date"] if docs else None
+    hasta = docs[-1]["fecha"]["$date"] if docs else None
+    return {
+        "count": len(docs),
+        "scanned": scanned,
+        "desde": desde,
+        "hasta": hasta,
+        "desde_local": homo.local_stamp(desde),
+        "hasta_local": homo.local_stamp(hasta),
+        "tz": "America/Lima",
+        "docs": docs,
+    }
+
+
 @app.get("/api/homologate/sent")
 async def homologate_sent(
     status: str | None = None,

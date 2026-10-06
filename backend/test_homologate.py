@@ -1,6 +1,17 @@
 """Equivalencia madurador fase actual (logica_madurador_carne.md), sin Mongo / HTTP."""
 
-from homologate import D3_STATIC, D4_STATIC, build_standard, classify_frame, date_key, hour_key, split_json_objects
+from homologate import (
+    D3_STATIC,
+    D4_STATIC,
+    build_standard,
+    classify_frame,
+    date_key,
+    fecha_utc_ms,
+    hour_key,
+    local_stamp,
+    mongo_load_doc,
+    split_json_objects,
+)
 
 MAD_D01 = (
     "1B0204000082A7009600FE7FA20088008F018C02FF7FFF009E00A1009C009D005000FE7FFE7FFE7F"
@@ -103,6 +114,17 @@ def test_forma_b_does_not_map_alarm_to_d02():
     assert "82A700" not in classified["opcodes"]
 
 
+def test_mongo_load_keeps_utc():
+    classified = classify_frame({"direction": "rx", "value_type": "hex", "text": MAD_FRAME})
+    doc = mongo_load_doc(classified["payload"], "2026-10-06T18:12:22.970555Z")
+    assert doc["estado"] == 1
+    assert doc["fecha"] == {"$date": "2026-10-06T18:12:22.970Z"}
+    assert doc["d3"] == D3_STATIC
+    assert doc["d4"] == D4_STATIC
+    assert fecha_utc_ms("2026-10-06T18:12:22.970555Z") == "2026-10-06T18:12:22.970Z"
+    assert local_stamp("2026-10-06T18:12:22.970555Z") == "2026-10-06 13:12:22"
+
+
 def test_hour_key_lima():
     assert hour_key("2026-09-09T15:26:41.752381Z") == "2026-09-09 10:00"
     assert date_key("2026-09-09T15:26:41.752381Z") == "2026-09-09"
@@ -114,5 +136,6 @@ if __name__ == "__main__":
     test_opcode_in_other_field_does_not_fill_d1()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
+    test_mongo_load_keeps_utc()
     test_hour_key_lima()
     print("ok")

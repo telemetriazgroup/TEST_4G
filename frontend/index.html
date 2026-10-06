@@ -282,6 +282,7 @@
       <div class="panel-head">
         <h2 id="sentTitle">Tramas enviadas</h2>
         <span id="sentCount" class="badge">0</span>
+        <button type="button" id="btnExportHistorico" class="btn primary">Procesar histórico</button>
         <div class="filters">
           <select id="sentStatus" aria-label="Estado">
             <option value="all" selected>Todos los estados</option>
@@ -297,6 +298,7 @@
         </div>
         <button type="button" id="btnRefreshSent" class="btn primary">Actualizar</button>
       </div>
+      <p id="exportHistoricoMeta" class="hint">Procesar histórico recorre toda la base y descarga el JSON para Mongo.</p>
       <div id="sentWrap" class="hours-wrap">
         <table class="capture-table" id="sentTable">
           <thead>

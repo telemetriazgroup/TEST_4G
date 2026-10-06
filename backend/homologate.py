@@ -189,6 +189,66 @@ def named_hex(obj: dict[str, Any], name: str) -> str:
     return ""
 
 
+def fecha_utc_ms(ts: str | None) -> str | None:
+    """Instante UTC con milisegundos, el mismo que guarda ISODate."""
+    if not ts:
+        return None
+    raw = str(ts).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def local_stamp(ts: str | None) -> str | None:
+    """YYYY-MM-DD HH:MM:SS en la zona de operación (Lima)."""
+    if not ts:
+        return None
+    raw = str(ts).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(env_tz()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mongo_load_doc(payload: dict[str, Any], ts: str | None) -> dict[str, Any] | None:
+    """Documento listo para mongoimport. fecha = ts UTC de la trama, no la hora del export."""
+    fecha = fecha_utc_ms(ts)
+    if not payload or not fecha:
+        return None
+    return {
+        "i": payload.get("i"),
+        "ip": None,
+        "c": None,
+        "d00": None,
+        "d01": None,
+        "d02": None,
+        "d03": None,
+        "d04": None,
+        "d05": None,
+        "d06": None,
+        "d07": None,
+        "d08": None,
+        "d1": payload.get("d1"),
+        "d2": payload.get("d2"),
+        "d3": payload.get("d3"),
+        "d4": payload.get("d4"),
+        "gps": None,
+        "va": None,
+        "rs": None,
+        "r": None,
+        "estado": 1,
+        "fecha": {"$date": fecha},
+    }
+
+
 def build_standard(obj: dict[str, Any], unit: str | None = None) -> dict[str, Any] | None:
     """Arma el JSON de esta fase. Sin d1 y d2 no hay envío."""
     ident = obj.get("i")
