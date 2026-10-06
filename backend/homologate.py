@@ -204,6 +204,21 @@ def fecha_utc_ms(ts: str | None) -> str | None:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def fecha_export(ts: str | None) -> str | None:
+    """Reloj del archivo, sin sumar 5 h. Ese reloj se escribe como si ya fuera UTC."""
+    if not ts:
+        return None
+    raw = str(ts).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    wall = dt.astimezone(env_tz())
+    return wall.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def local_stamp(ts: str | None) -> str | None:
     """YYYY-MM-DD HH:MM:SS en la zona de operación (Lima)."""
     if not ts:
@@ -219,8 +234,8 @@ def local_stamp(ts: str | None) -> str | None:
 
 
 def mongo_load_doc(payload: dict[str, Any], ts: str | None) -> dict[str, Any] | None:
-    """Documento listo para mongoimport. fecha = ts UTC de la trama, no la hora del export."""
-    fecha = fecha_utc_ms(ts)
+    """Documento listo para mongoimport. fecha = hora del archivo, sin +5 h."""
+    fecha = fecha_export(ts)
     if not payload or not fecha:
         return None
     return {

@@ -264,7 +264,7 @@
         <button type="button" id="btnExportArchive" class="btn primary">Descargar día</button>
         <button type="button" id="btnRefreshArchive" class="btn ghost">Cargar día</button>
       </div>
-      <p id="archiveExportMeta" class="export-progress">Procesar histórico recorre cada día del archivo, acumula las tramas con fecha UTC y estado 1, y deja el JSON para Mongo.</p>
+      <p id="archiveExportMeta" class="export-progress">Procesar histórico recorre cada día del archivo, acumula las tramas con la misma hora del archivo y estado 1, y deja el JSON para Mongo.</p>
 
       <div class="archive-layout">
         <aside class="day-list-wrap">
@@ -520,6 +520,6 @@
   </main>
   </div>
 
-  <script src="app.js?v=20261006c"></script>
+  <script src="app.js?v=20261006d"></script>
 </body>
 </html>

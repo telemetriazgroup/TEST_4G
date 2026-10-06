@@ -1614,7 +1614,7 @@
         if (processBtn) processBtn.textContent = `${step} · ${cargaDocs.length}`;
         if (meta) {
           meta.textContent =
-            `Analizando día ${step} · ${day} · ${cargaDocs.length} tramas acumuladas (fecha UTC, estado 1)…`;
+            `Analizando día ${step} · ${day} · ${cargaDocs.length} tramas acumuladas (misma hora del archivo, estado 1)…`;
         }
         const r = await fetch(`${API}/api/homologate/export?date=${encodeURIComponent(day)}`);
         const data = await r.json();
@@ -1648,7 +1648,7 @@
       if (meta) {
         meta.textContent =
           `${cargaDocs.length} tramas homologables · ${days.length} día(s) · ${fileFrom} → ${fileTo}. ` +
-          `Archivo ${cargaFilename} listo para Mongo (fecha UTC, estado 1).`;
+          `Archivo ${cargaFilename} listo para Mongo (misma hora del archivo, estado 1).`;
       }
     } catch (e) {
       if (meta) meta.textContent = String(e);

@@ -6,6 +6,7 @@ from homologate import (
     build_standard,
     classify_frame,
     date_key,
+    fecha_export,
     fecha_utc_ms,
     hour_key,
     local_stamp,
@@ -118,9 +119,10 @@ def test_mongo_load_keeps_utc():
     classified = classify_frame({"direction": "rx", "value_type": "hex", "text": MAD_FRAME})
     doc = mongo_load_doc(classified["payload"], "2026-10-06T18:12:22.970555Z")
     assert doc["estado"] == 1
-    assert doc["fecha"] == {"$date": "2026-10-06T18:12:22.970Z"}
+    assert doc["fecha"] == {"$date": "2026-10-06T13:12:22.970Z"}
     assert doc["d3"] == D3_STATIC
     assert doc["d4"] == D4_STATIC
+    assert fecha_export("2026-10-06T18:12:22.970555Z") == "2026-10-06T13:12:22.970Z"
     assert fecha_utc_ms("2026-10-06T18:12:22.970555Z") == "2026-10-06T18:12:22.970Z"
     assert local_stamp("2026-10-06T18:12:22.970555Z") == "2026-10-06 13:12:22"
 
