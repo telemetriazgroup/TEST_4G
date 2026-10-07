@@ -47,7 +47,18 @@ export type Session = {
 };
 
 const API = import.meta.env.VITE_API_URL ?? "";
-export const SERIAL_URL = import.meta.env.VITE_SERIAL_URL || "http://localhost:8089";
+
+/** Mismo host con el que se abrió Ztrack. No manda a localhost si entraron por la IP del servidor. */
+export function serialUrl(): string {
+  const fallback = (import.meta.env.VITE_SERIAL_URL as string) || "http://localhost:8089";
+  if (typeof window === "undefined") return fallback;
+  const host = window.location.hostname;
+  if (!host || host === "localhost" || host === "127.0.0.1") return fallback;
+  const proto = window.location.protocol || "http:";
+  return `${proto}//${host}:8089`;
+}
+
+export const SERIAL_URL = serialUrl();
 
 export async function clientLogin(username: string, password: string): Promise<Session> {
   const r = await fetch(`${API}/api/client/login`, {
@@ -66,8 +77,16 @@ export async function fetchLive(ident = "POLLO_BEBE"): Promise<LiveSnapshot> {
   return r.json();
 }
 
-export async function fetchSeries(hours: number, ident = "POLLO_BEBE"): Promise<SeriesPoint[]> {
-  const r = await fetch(`${API}/api/client/series?ident=${encodeURIComponent(ident)}&hours=${hours}`);
+export async function fetchSeries(
+  hours: number,
+  ident = "POLLO_BEBE",
+  start?: string,
+  end?: string,
+): Promise<SeriesPoint[]> {
+  const p = new URLSearchParams({ ident, hours: String(hours) });
+  if (start) p.set("start", start);
+  if (end) p.set("end", end);
+  const r = await fetch(`${API}/api/client/series?${p.toString()}`);
   if (!r.ok) throw new Error("No se pudo leer la serie");
   const data = await r.json();
   return data.points || [];

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { serialUrl } from '../api'
 
 type FormState = 'idle' | 'loading' | 'error' | 'offline'
 
@@ -105,7 +106,7 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
 
   const finishLogin = (session: LocalSession) => {
     if (session.role === 'superadmin') {
-      window.location.href = (import.meta.env.VITE_SERIAL_URL as string) || 'http://localhost:8089'
+      window.location.href = serialUrl()
       return
     }
     onLogin(session, remember)

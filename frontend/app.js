@@ -4,6 +4,8 @@
   const LIVE_MAX = 100;
   const SESSION_KEY = "ztrack_session";
   const ZTRACK_URL = `${location.protocol}//${location.hostname}:8444`;
+  const ztrackLink = document.getElementById("ztrackLink");
+  if (ztrackLink) ztrackLink.setAttribute("href", ZTRACK_URL);
 
   function readSession() {
     try {
@@ -1242,18 +1244,35 @@
     openArchiveHours.clear();
     els.archiveMeta.textContent = `Cargando ${formatDayLabel(dateKey)}…`;
     try {
-      const parts = [`date=${encodeURIComponent(dateKey)}`, "limit=10000"];
-      const base = historyQueryBase();
-      if (base) parts.unshift(base);
-      const r = await fetch(`${API}/api/history?${parts.join("&")}`);
-      const data = await r.json();
-      archive = data.messages || [];
-      const total = data.total ?? archive.length;
+      const all = [];
+      let skip = 0;
+      let total = 0;
+      const page = 5000;
+      while (true) {
+        const parts = [
+          `date=${encodeURIComponent(dateKey)}`,
+          `limit=${page}`,
+          `skip=${skip}`,
+        ];
+        const base = historyQueryBase();
+        if (base) parts.unshift(base);
+        const r = await fetch(`${API}/api/history?${parts.join("&")}`);
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "No se pudo leer el día");
+        const batch = data.messages || [];
+        total = data.total ?? all.length + batch.length;
+        all.push(...batch);
+        if (!batch.length || all.length >= total) break;
+        skip += batch.length;
+        els.archiveMeta.textContent =
+          `Cargando ${formatDayLabel(dateKey)}… ${all.length} de ${total}`;
+      }
+      archive = all;
       renderArchive();
       if (dateKey) scanHomologate({ date: dateKey });
       if (total > archive.length) {
         els.archiveMeta.textContent +=
-          ` · mostrando ${archive.length} de ${total} (usa filtros para acotar)`;
+          ` · mostrando ${archive.length} de ${total}`;
       }
     } catch (e) {
       els.archiveMeta.textContent = String(e);

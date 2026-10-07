@@ -408,10 +408,10 @@ export default function Historico({ ident = "POLLO_BEBE" }: { ident?: string }) 
   useEffect(() => {
     const start = new Date(`${rStart}T00:00:00`);
     const end = new Date(`${rEnd}T23:59:59`);
-    const hours = Math.min(168, Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 3600000)));
+    const hours = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 3600000));
     let cancel = false;
     setLoading(true);
-    fetchSeries(hours, ident)
+    fetchSeries(hours, ident, start.toISOString(), end.toISOString())
       .then((rows) => {
         if (cancel) return;
         const pts = seriesToPoints(rows, start).filter((d) => {

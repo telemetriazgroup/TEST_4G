@@ -199,12 +199,14 @@ def _history_query(
     elif ip:
         q["ip"] = ip
     if date:
+        if len(date) != 10 or date[4] != "-" or date[7] != "-":
+            raise HTTPException(400, "date debe ser YYYY-MM-DD")
         try:
-            start = datetime.fromisoformat(f"{date}T00:00:00+00:00")
+            nxt = (datetime.fromisoformat(date) + timedelta(days=1)).date().isoformat()
         except ValueError as e:
             raise HTTPException(400, "date debe ser YYYY-MM-DD") from e
-        end = start + timedelta(days=1)
-        q["ts"] = {"$gte": start.isoformat(), "$lt": end.isoformat()}
+        # Misma clave que /api/history/days (prefijo del ts), sin correr la hora.
+        q["ts"] = {"$gte": date, "$lt": nxt}
     return q
 
 
@@ -806,24 +808,46 @@ async def _seguimiento_worker() -> None:
             await asyncio.sleep(0.2)
 
 
-async def _backfill_seguimiento(limit: int = 2000) -> int:
-    """Decodifica tramas RX ya guardadas que aún no están en seguimiento."""
+async def _mark_seguimiento(mid: Any, value: Any) -> None:
+    if not mid:
+        return
     try:
-        q = {
-            "direction": "rx",
-            "value_type": {"$ne": "tcp_header"},
-            "seguimiento": {"$ne": True},
-        }
-        rows = await db.messages.find(q).sort("ts", -1).limit(limit).to_list(limit)
+        await db.messages.update_one({"_id": mid}, {"$set": {"seguimiento": value}})
+    except Exception:
+        log.exception("no se pudo marcar seguimiento")
+
+
+async def _backfill_seguimiento(batch: int = 500) -> int:
+    """Decodifica todo el histórico RX que aún no está en seguimiento, de la trama más antigua a la última."""
+    try:
         n = 0
-        for doc in reversed(rows):
-            if not _looks_decodable(doc):
-                continue
-            try:
-                if await _save_seguimiento(_decode_job_from_doc(doc), notify=False):
+        while True:
+            q = {
+                "direction": "rx",
+                "value_type": {"$ne": "tcp_header"},
+                "seguimiento": {"$nin": [True, "skip"]},
+            }
+            rows = await db.messages.find(q).sort("ts", 1).limit(batch).to_list(batch)
+            if not rows:
+                break
+            for doc in rows:
+                mid = doc.get("_id")
+                if not _looks_decodable(doc):
+                    await _mark_seguimiento(mid, "skip")
+                    continue
+                try:
+                    saved = await _save_seguimiento(_decode_job_from_doc(doc), notify=False)
+                except Exception:
+                    log.exception("backfill seguimiento doc=%s", mid)
+                    await _mark_seguimiento(mid, "skip")
+                    continue
+                if saved:
                     n += 1
-            except Exception:
-                log.exception("backfill seguimiento doc=%s", doc.get("_id"))
+                else:
+                    await _mark_seguimiento(mid, "skip")
+            if len(rows) < batch:
+                break
+            await asyncio.sleep(0)
         if n:
             log.info("seguimiento backfill: %s decodificados", n)
         return n
@@ -1763,12 +1787,34 @@ async def client_live(ident: str = capi.IDENT_DEFAULT):
 
 
 @app.get("/api/client/series")
-async def client_series(ident: str = capi.IDENT_DEFAULT, hours: int = 6):
-    hours = max(1, min(hours, 168))
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    q = {"i": ident, "kind": "info", "ts": {"$gte": since}}
-    rows = await db.seguimiento.find(q, {"_id": 0}).sort("ts", 1).to_list(4000)
-    return capi.build_series(rows, hours)
+async def client_series(
+    ident: str = capi.IDENT_DEFAULT,
+    hours: int = 6,
+    start: str | None = None,
+    end: str | None = None,
+):
+    """Serie de seguimiento. Con start/end lee ese rango guardado; si no, las últimas horas."""
+    q: dict[str, Any] = {"i": ident, "kind": "info"}
+    if start or end:
+        rng: dict[str, str] = {}
+        if start:
+            rng["$gte"] = start
+        if end:
+            rng["$lte"] = end
+        q["ts"] = rng
+        span_h = hours
+    else:
+        hours = max(1, min(hours, 24 * 366))
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        q["ts"] = {"$gte": since}
+        span_h = hours
+    rows: list[dict[str, Any]] = []
+    cursor = db.seguimiento.find(q, {"_id": 0}).sort("ts", 1)
+    async for row in cursor:
+        rows.append(row)
+        if len(rows) >= 100000:
+            break
+    return capi.build_series(rows, span_h)
 
 
 @app.post("/api/client/setpoints")
@@ -2048,7 +2094,7 @@ async def get_history(
     skip: int = 0,
 ):
     q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
-    max_limit = 10000 if date else 2000
+    max_limit = 20000 if date else 5000
     limit = max(1, min(limit, max_limit))
     skip = max(0, skip)
     total = await db.messages.count_documents(q)
