@@ -1895,11 +1895,37 @@ async def client_ranges_save(body: ZoneRangeBody):
     return {"ok": True, "ident": body.ident, "zones": zones}
 
 
+async def _hold_last_positive(ident: str, snap: dict[str, Any]) -> None:
+    """Si la lectura actual de suministro, retorno o humedad es 0, se conserva la anterior."""
+    keys = [k for k in ("supply_air_c", "return_air_c", "humidity_pct") if snap.get(k) is None]
+    if not keys:
+        return
+    found: dict[str, float | None] = {k: None for k in keys}
+    cursor = db.seguimiento.find(
+        {"i": ident, "kind": "info"},
+        {"_id": 0, "snapshot": 1},
+    ).sort("ts", -1).limit(400)
+    async for row in cursor:
+        shot = row.get("snapshot") or {}
+        for key in keys:
+            if found[key] is not None:
+                continue
+            value = capi._positive(shot.get(key))
+            if value is not None:
+                found[key] = value
+        if all(found[key] is not None for key in keys):
+            break
+    for key, value in found.items():
+        if value is not None:
+            snap[key] = value
+
+
 @app.get("/api/client/live")
 async def client_live(ident: str = capi.IDENT_DEFAULT):
     latest, online, sess = await _unit_context(ident)
     names = await _relay_names_for(ident)
     snap = capi.build_live(latest, ident=ident, online=online, names=names)
+    await _hold_last_positive(ident, snap)
     snap["session_id"] = (sess or {}).get("session_id")
     snap["ip"] = (sess or {}).get("ip")
     snap["addr"] = (sess or {}).get("addr")

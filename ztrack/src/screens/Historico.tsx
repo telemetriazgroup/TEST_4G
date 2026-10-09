@@ -59,14 +59,14 @@ function toRows(points: SeriesPoint[]): Row[] {
       const ts = new Date(p.ts).getTime();
       return {
         ts,
-        supply: num(p.supply_air_c),
-        return_: num(p.return_air_c),
+        supply: num(p.supply_air_c) === 0 ? null : num(p.supply_air_c),
+        return_: num(p.return_air_c) === 0 ? null : num(p.return_air_c),
         setpoint: num(p.setpoint_c),
         z1: num(p.usda1_c),
         z2: num(p.usda2_c),
         z3: num(p.usda3_c),
         z4: num(p.usda4_c),
-        humidity: num(p.humidity_pct),
+        humidity: num(p.humidity_pct) === 0 ? null : num(p.humidity_pct),
         co2: num(p.co2_pct),
       };
     })
@@ -620,11 +620,15 @@ export default function Historico({ ident = "POLLO_BEBE" }: { ident?: string }) 
         <section style={{ ...card, padding: 16, minHeight: 480 }}>
           {mode === "grafico" ? (
             <>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                 <span style={{ fontSize: 13, color: "#66758A" }}>
                   {loading ? "Cargando lecturas…" : `${rows.length} lecturas`}
                   {err ? ` · ${err}` : ""}
                 </span>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={downloadPdf} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar PDF</button>
+                  <button type="button" onClick={downloadCsv} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar CSV</button>
+                  <button type="button" onClick={downloadExcel} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar Excel</button>
                 <button
                   type="button"
                   onClick={() => setZoom(null)}
@@ -632,6 +636,7 @@ export default function Historico({ ident = "POLLO_BEBE" }: { ident?: string }) 
                 >
                   Restablecer zoom
                 </button>
+                </div>
               </div>
               {!loading && !rows.length ? (
                 <p style={{ color: "#66758A", padding: 24 }}>No hay lecturas en este periodo.</p>

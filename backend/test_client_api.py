@@ -48,7 +48,31 @@ def test_series_only_info():
     assert out["points"][0]["co2_pct"] == 0.2
 
 
+def test_zero_supply_return_humidity_dropped():
+    latest = {
+        "info": {
+            "snapshot": {
+                "supply_air_c": 0,
+                "return_air_c": 0.0,
+                "humidity_pct": 0,
+                "setpoint_c": 24,
+                "co2_pct": 0.4,
+            }
+        }
+    }
+    snap = build_live(latest)
+    assert snap["supply_air_c"] is None
+    assert snap["return_air_c"] is None
+    assert snap["humidity_pct"] is None
+    assert snap["setpoint_c"] == 24
+    out = build_series([{"kind": "info", "ts": "t", "snapshot": {"supply_air_c": 0, "return_air_c": 28.2, "humidity_pct": 0}}], 1)
+    assert out["points"][0]["supply_air_c"] is None
+    assert out["points"][0]["return_air_c"] == 28.2
+    assert out["points"][0]["humidity_pct"] is None
+
+
 if __name__ == "__main__":
     test_live_co2_percent_and_motors()
     test_series_only_info()
+    test_zero_supply_return_humidity_dropped()
     print("ok")

@@ -56,18 +56,23 @@ function Spinner({ sz = 16 }: { sz?: number }) {
 // ── Logo ─────────────────────────────────────────────────────────────────────
 function Logo() {
   return (
-    <div className="flex items-center gap-2.5" style={{ color: 'var(--text)', height: '40px' }}>
-      <span
-        style={{
-          fontSize: '21px',
-          fontWeight: 700,
-          letterSpacing: '-0.05em',
-          lineHeight: 1,
-          fontFamily: "'Inter', -apple-system, sans-serif",
-        }}
-      >
-        Ztrack Monitor
-      </span>
+    <div className="flex flex-col items-center gap-2">
+      <svg width="88" height="72" viewBox="0 0 88 72" aria-hidden>
+        <rect x="4" y="22" width="52" height="32" rx="6" fill="#12263A" />
+        <rect x="8" y="26" width="22" height="12" rx="2" fill="#3AA0FF" opacity="0.9" />
+        <rect x="32" y="26" width="20" height="12" rx="2" fill="#7ED0FF" opacity="0.85" />
+        <path d="M56 30h10l10 8v16H56V30z" fill="#2F6BFF" />
+        <path d="M60 34h8l6 6v4H60V34z" fill="#E8F3FF" />
+        <circle cx="22" cy="56" r="6" fill="#1B2430" />
+        <circle cx="22" cy="56" r="2.4" fill="#F4F6F9" />
+        <circle cx="66" cy="56" r="6" fill="#1B2430" />
+        <circle cx="66" cy="56" r="2.4" fill="#F4F6F9" />
+        <ellipse cx="70" cy="16" rx="11" ry="9" fill="#F6C445" />
+        <circle cx="74" cy="14" r="1.4" fill="#1B2430" />
+        <path d="M80 16l6 1.2-6 2.2z" fill="#E07A2F" />
+        <path d="M62 20c2 4 6 5 8 3" fill="none" stroke="#E0A020" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+      <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '0.08em', color: '#12263A' }}>ZTRACK</span>
     </div>
   )
 }
@@ -195,7 +200,7 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
                   Inicia sesión
                 </h1>
                 <p style={{ fontSize: '15px', color: 'var(--text-2)', marginTop: '5px', lineHeight: 1.4 }}>
-                  Control de transporte de pollo BB
+                  Transporte de pollos bebés
                 </p>
               </div>
             </div>
@@ -385,13 +390,6 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
           </form>
         </div>
 
-        {/* Version string — desktop, below card ───────────────────────────── */}
-        <p
-          className="hidden md:block mt-8 text-center"
-          style={{ fontSize: '12px', color: 'var(--text-2)', letterSpacing: '0.01em' }}
-        >
-          admin / admin · monitor / monitor · superadmin → serial :8089
-        </p>
       </div>
 
       {/* ── Mobile: button fixed at bottom (above virtual keyboard) ─────── */}
@@ -421,12 +419,6 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
           {btnContent}
         </button>
 
-        <p
-          className="text-center mt-4"
-          style={{ fontSize: '12px', color: 'var(--text-2)', letterSpacing: '0.01em' }}
-        >
-          admin / admin · monitor / monitor · superadmin → serial :8089
-        </p>
       </div>
     </div>
   )

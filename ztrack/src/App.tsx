@@ -241,7 +241,7 @@ export default function App() {
   })
 
   const screens: Record<Route, ReactNode> = {
-    principal:      <Principal live={live} freshnessSec={freshnessSec} isDataStale={isDataStale} onRefresh={loadLive} />,
+    principal:      <Principal live={live} freshnessSec={freshnessSec} isDataStale={isDataStale} onRefresh={loadLive} canControl={isAdmin} />,
     avisos:         <Alertas live={live} stale={isDataStale} />,
     configuracion:  <Configuracion live={live} />,
     administracion: <Administracion />,

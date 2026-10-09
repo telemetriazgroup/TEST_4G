@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { fetchSeries, seriesField, type LiveSnapshot, type SeriesPoint } from '../api'
+import { enqueueCommand, fetchSeries, type LiveSnapshot, type SeriesPoint } from '../api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type TimeRange = '1h' | '6h' | '24h'
@@ -32,12 +32,6 @@ const COLOR: Record<Status, string> = {
   green: 'var(--c-green)',
   amber: 'var(--c-amber)',
   red:   'var(--c-red)',
-}
-
-const FILL_RGBA: Record<Status, string> = {
-  green: 'rgba(52, 199, 89, 0.16)',
-  amber: 'rgba(255, 159, 10, 0.20)',
-  red:   'rgba(255, 59, 48, 0.16)',
 }
 
 function seededRand(seed: number) {
@@ -140,65 +134,67 @@ function RadialGauge({
 }
 
 // ── TruckDiagram ──────────────────────────────────────────────────────────────
+const ZONE_TONE = ['#2F6BFF', '#0E9A8A', '#E07A2F', '#7B5EA7']
+
 function TruckDiagram({ zones, setpoint }: { zones: ZoneVal[]; setpoint: number }) {
-  const temps = [1, 2, 3, 4].map((id) => zones.find((z) => z.id === id)?.temp ?? null)
-  const [s1, s2, s3, s4] = temps.map((t) => (t == null ? 'green' : zoneStatus(t, setpoint))) as Status[]
+  const cells = [1, 2, 3, 4].map((id) => {
+    const temp = zones.find((z) => z.id === id)?.temp ?? null
+    const st: Status = temp == null ? 'green' : zoneStatus(temp, setpoint)
+    return { id, temp, st, tone: ZONE_TONE[id - 1] }
+  })
 
   return (
     <div
-      className="rounded-[14px] p-4"
+      className="rounded-[14px] p-4 md:p-5"
       style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--sep)', boxShadow: 'var(--shadow)' }}
     >
-      <p style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-2)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '10px' }}>
-        Distribución de zonas
-      </p>
-      <svg viewBox="0 0 290 100" width="100%" style={{ maxHeight: 100, display: 'block' }}>
-        {/* Cargo body outline */}
-        <rect x="8" y="10" width="214" height="80" rx="7"
-          fill="var(--bg)" stroke="var(--sep)" strokeWidth="1.5" />
-
-        {/* Zone fills */}
-        <rect x="9"   y="11" width="106" height="39" rx="6" fill={FILL_RGBA[s1!]} />
-        <rect x="115" y="11" width="106" height="39" rx="6" fill={FILL_RGBA[s2!]} />
-        <rect x="9"   y="50" width="106" height="39" rx="6" fill={FILL_RGBA[s3!]} />
-        <rect x="115" y="50" width="106" height="39" rx="6" fill={FILL_RGBA[s4!]} />
-
-        {/* Internal dividers */}
-        <line x1="115" y1="11" x2="115" y2="89" stroke="var(--sep)" strokeWidth="1.5" />
-        <line x1="9"   y1="50" x2="221" y2="50" stroke="var(--sep)" strokeWidth="1.5" />
-
-        {/* Zone labels */}
-        {([
-          [62,  32, 1, s1!],
-          [168, 32, 2, s2!],
-          [62,  71, 3, s3!],
-          [168, 71, 4, s4!],
-        ] as [number, number, number, Status][]).map(([x, y, id, st]) => (
-          <text key={id} x={x} y={y}
-            textAnchor="middle"
-            fontSize="12" fontWeight="600"
-            fill={COLOR[st]}
-            fontFamily="Inter, system-ui, sans-serif"
-          >
-            Z{id}
-          </text>
-        ))}
-
-        {/* Cab */}
-        <rect x="222" y="22" width="48" height="56" rx="7"
-          fill="var(--bg)" stroke="var(--sep)" strokeWidth="1.5" />
-        <rect x="229" y="28" width="33" height="20" rx="3"
-          fill="var(--sep)" fillOpacity="0.55" />
-
-        {/* Wheels */}
-        <rect x="222" y="80" width="16" height="8" rx="4" fill="var(--sep)" />
-        <rect x="254" y="80" width="16" height="8" rx="4" fill="var(--sep)" />
-        <rect x="8"   y="80" width="16" height="8" rx="4" fill="var(--sep)" />
-        <rect x="46"  y="80" width="16" height="8" rx="4" fill="var(--sep)" />
-
-        {/* Direction indicator */}
-        <text x="282" y="53" textAnchor="middle" fontSize="12" fill="var(--text-2)" fontFamily="Inter, sans-serif">→</text>
-      </svg>
+      <div className="flex items-center justify-between mb-3 gap-3">
+        <p style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-2)', letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+          Furgón refrigerado
+        </p>
+        <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Consigna {fmtTemp(setpoint)} °C</span>
+      </div>
+      <div className="flex items-stretch gap-2">
+        <div
+          className="grid grid-cols-2 gap-2 flex-1 p-2"
+          style={{ background: '#F3F7FB', border: '2px solid #12263A', borderRadius: 16 }}
+        >
+          {cells.map((z) => (
+            <div
+              key={z.id}
+              className="rounded-[12px] px-3 py-3"
+              style={{
+                background: z.st === 'red' ? 'rgba(226,75,75,0.12)' : z.st === 'amber' ? 'rgba(224,154,43,0.14)' : '#fff',
+                border: `2px solid ${z.st === 'red' ? '#E24B4B' : z.st === 'amber' ? '#E09A2B' : z.tone}`,
+                boxShadow: z.st === 'red' ? '0 0 0 3px rgba(226,75,75,0.15)' : 'none',
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span style={{ fontSize: 12, fontWeight: 700, color: z.tone }}>Zona {z.id}</span>
+                <span style={{ width: 8, height: 8, borderRadius: 99, background: COLOR[z.st], display: 'inline-block' }} />
+              </div>
+              <p className="tabular-nums font-semibold" style={{ fontSize: 28, lineHeight: 1.1, color: z.st === 'red' ? '#E24B4B' : '#1B2430', marginTop: 4 }}>
+                {z.temp == null ? '—' : fmtTemp(z.temp)}
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#66758A', marginLeft: 4 }}>°C</span>
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-col items-center justify-between shrink-0" style={{ width: 72 }}>
+          <div className="flex items-center justify-center rounded-[10px]" style={{ width: 56, height: 36, background: '#E8F3FF', color: '#2F6BFF', border: '1px solid #B9D4FF', fontSize: 18 }} title="Equipo de frío">
+            ❄
+          </div>
+          <div className="flex-1 my-1 rounded-[12px] w-full" style={{ background: 'linear-gradient(180deg,#1B3A5C,#12263A)', minHeight: 72, position: 'relative' }}>
+            <div style={{ position: 'absolute', top: 10, left: 8, right: 8, height: 22, borderRadius: 6, background: '#D7E8F8' }} />
+          </div>
+          <div style={{ width: 22, height: 22, borderRadius: 99, background: '#1B2430', border: '3px solid #C5D0DE' }} />
+        </div>
+      </div>
+      <div className="flex gap-4 mt-3" style={{ fontSize: 12, color: '#66758A' }}>
+        <span><i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: 'var(--c-green)', marginRight: 6 }} />En rango</span>
+        <span><i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: 'var(--c-amber)', marginRight: 6 }} />Cerca del límite</span>
+        <span><i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 99, background: 'var(--c-red)', marginRight: 6 }} />Fuera de banda</span>
+      </div>
     </div>
   )
 }
@@ -358,24 +354,94 @@ const TONE: Record<string, string> = {
   motors: '#3AA76D',
 }
 
-function ParamMark({ tone, glyph }: { tone: string; glyph: string }) {
+const ICO = {
+  fill: 'none' as const,
+  stroke: 'currentColor' as const,
+  strokeWidth: 1.8,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+}
+
+function ParamSvg({ id }: { id: string }) {
+  if (id === 'supply') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <path d="M12 3v8" /><path d="M8 7l4 4 4-4" /><path d="M6 14h12v5a2 2 0 01-2 2H8a2 2 0 01-2-2v-5z" />
+      </svg>
+    )
+  }
+  if (id === 'return_') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <path d="M12 21V13" /><path d="M8 17l4-4 4 4" /><path d="M6 5h12v5H6z" />
+      </svg>
+    )
+  }
+  if (id === 'setpoint') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      </svg>
+    )
+  }
+  if (id === 'humidity') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <path d="M12 3s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z" />
+      </svg>
+    )
+  }
+  if (id === 'co2') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <path d="M7 18a4 4 0 010-8 5 5 0 019.5-1.5A3.5 3.5 0 0118 18H7z" />
+      </svg>
+    )
+  }
+  if (id === 'motors' || id === 'ventilation') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+        <circle cx="12" cy="12" r="2" /><path d="M12 10c2-4 6-4 7-2s-2 5-5 4M14 12c4 2 4 6 2 7s-5-2-4-5M12 14c-2 4-6 4-7 2s2-5 5-4M10 12c-4-2-4-6-2-7s5 2 4 5" />
+      </svg>
+    )
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" {...ICO}>
+      <path d="M4 8h16v10H4z" /><path d="M8 8V6h8v2" />
+    </svg>
+  )
+}
+
+function ParamMark({ tone, id }: { tone: string; id: string }) {
+  const zone = /^z(\d)$/.exec(id)
   return (
     <span
       className="inline-flex items-center justify-center rounded-[8px] shrink-0"
-      style={{ width: 28, height: 28, backgroundColor: `${tone}1A`, color: tone, fontSize: 14, fontWeight: 700 }}
+      style={{ width: 28, height: 28, backgroundColor: `${tone}1A`, color: tone }}
       aria-hidden
     >
-      {glyph}
+      {zone ? <span style={{ fontSize: 13, fontWeight: 700 }}>{zone[1]}</span> : <ParamSvg id={id} />}
+    </span>
+  )
+}
+
+function Trend({ dir }: { dir: 'up' | 'down' | 'flat' }) {
+  const color = dir === 'up' ? '#E07A2F' : dir === 'down' ? '#2F6BFF' : '#8A97A8'
+  const mark = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '▬'
+  const label = dir === 'up' ? 'Sube' : dir === 'down' ? 'Baja' : 'Estable'
+  return (
+    <span title={label} aria-label={label} style={{ color, fontSize: 16, fontWeight: 700, lineHeight: 1 }}>
+      {mark}
     </span>
   )
 }
 
 // ── AirCard ───────────────────────────────────────────────────────────────────
 function AirCard({
-  id, label, value, delta, history, isSetpoint = false, stale = false, noData = false, glyph = '°',
+  id, label, value, delta, history, trend = 'flat', isSetpoint = false, stale = false, noData = false,
 }: {
-  id: string; label: string; value: number; delta: number;
-  history: number[]; isSetpoint?: boolean; stale?: boolean; noData?: boolean; glyph?: string
+  id: string; label: string; value: number; delta: number; trend?: 'up' | 'down' | 'flat';
+  history: number[]; isSetpoint?: boolean; stale?: boolean; noData?: boolean
 }) {
   const tone = TONE[id] || 'var(--accent)'
   const chartColor = tone
@@ -385,7 +451,7 @@ function AirCard({
     return (
       <div className="rounded-[14px] p-4 md:p-5" style={{ backgroundColor: 'var(--surface)', border: borderStyle, boxShadow: 'var(--shadow)' }}>
         <div className="flex items-center gap-2 mb-3">
-          <ParamMark tone={tone} glyph={glyph} />
+          <ParamMark tone={tone} id={id} />
           <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>{label}</span>
           {isSetpoint && <ConsignaBadge />}
         </div>
@@ -401,7 +467,7 @@ function AirCard({
       style={{ backgroundColor: 'var(--surface)', border: borderStyle, boxShadow: 'var(--shadow)', opacity: stale ? 0.68 : 1, transition: 'opacity 0.4s' }}
     >
       <div className="flex items-center gap-2">
-        <ParamMark tone={tone} glyph={glyph} />
+        <ParamMark tone={tone} id={id} />
         <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>{label}</span>
         {isSetpoint && <ConsignaBadge />}
       </div>
@@ -410,6 +476,7 @@ function AirCard({
           {fmtTemp(value)}
         </span>
         <span style={{ fontSize: '18px', color: 'var(--text-2)' }}>°C</span>
+        <Trend dir={trend} />
       </div>
       <div style={{ marginLeft: '-2px', marginRight: '-2px' }}>
         <MiniChart data={history} color={chartColor} id={id} />
@@ -423,8 +490,8 @@ function AirCard({
 }
 
 // ── ZoneCard ──────────────────────────────────────────────────────────────────
-function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
-  id: number; temp: number; setpoint: number; stale?: boolean; noData?: boolean
+function ZoneCard({ id, temp, setpoint, trend = 'flat', stale = false, noData = false }: {
+  id: number; temp: number; setpoint: number; trend?: 'up' | 'down' | 'flat'; stale?: boolean; noData?: boolean
 }) {
   const st = zoneStatus(temp, setpoint)
   const tone = TONE[`z${id}`] || 'var(--accent)'
@@ -435,7 +502,7 @@ function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
       <div className="rounded-[14px] p-4" style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--sep)', boxShadow: 'var(--shadow)' }}>
         <div className="flex items-center justify-between mb-3">
           <span className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)' }}>
-            <ParamMark tone={tone} glyph={String(id)} />
+            <ParamMark tone={tone} id={`z${id}`} />
             Zona {id}
           </span>
           <span className="rounded-full" style={{ width: '8px', height: '8px', display: 'block', backgroundColor: 'var(--c-gray)' }} />
@@ -456,7 +523,7 @@ function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
     >
       <div className="flex items-center justify-between mb-3">
         <span className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)' }}>
-          <ParamMark tone={tone} glyph={String(id)} />
+          <ParamMark tone={tone} id={`z${id}`} />
           Zona {id}
         </span>
         <span className="rounded-full" style={{ width: '8px', height: '8px', display: 'block', backgroundColor: COLOR[st] }} />
@@ -466,6 +533,7 @@ function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
           {fmtTemp(temp)}
         </span>
         <span style={{ fontSize: '16px', color: 'var(--text-2)' }}>°C</span>
+        <Trend dir={trend} />
       </div>
       <p style={{ fontSize: '12px', color: st === 'green' ? 'var(--text-2)' : COLOR[st], marginTop: '8px' }}>
         {diffLabel}
@@ -505,17 +573,17 @@ function MotorBars({ speeds }: { speeds: number[] }) {
 // ── AtmoCard ──────────────────────────────────────────────────────────────────
 type AtmoType = 'co2' | 'ventilation' | 'motors' | 'humidity'
 
-const ATMO_META: Record<AtmoType, { label: string; unit: string; max: number; glyph: string }> = {
-  co2:         { label: 'CO₂',              unit: '%', max: 5, glyph: 'CO₂' },
-  ventilation: { label: 'Ventilación',      unit: '%', max: 100, glyph: 'V' },
-  motors:      { label: 'Ventilación · motores', unit: '%', max: 100, glyph: 'M' },
-  humidity:    { label: 'Humedad relativa', unit: '%', max: 100, glyph: '%' },
+const ATMO_META: Record<AtmoType, { label: string; unit: string; max: number }> = {
+  co2:         { label: 'CO₂',              unit: '%', max: 5 },
+  ventilation: { label: 'Ventilación',      unit: '%', max: 100 },
+  motors:      { label: 'Ventilación · motores', unit: '%', max: 100 },
+  humidity:    { label: 'Humedad relativa', unit: '%', max: 100 },
 }
 
 function AtmoCard({
-  type, value, motorSpeeds, stale = false, noData = false, co2Setpoint = null,
+  type, value, motorSpeeds, trend = 'flat', stale = false, noData = false, co2Setpoint = null,
 }: {
-  type: AtmoType; value: number; motorSpeeds?: number[]; stale?: boolean; noData?: boolean; co2Setpoint?: number | null
+  type: AtmoType; value: number; motorSpeeds?: number[]; trend?: 'up' | 'down' | 'flat'; stale?: boolean; noData?: boolean; co2Setpoint?: number | null
 }) {
   const meta = ATMO_META[type]
   const status: Status =
@@ -531,7 +599,7 @@ function AtmoCard({
       style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--sep)', boxShadow: 'var(--shadow)', opacity: stale ? 0.68 : 1, transition: 'opacity 0.4s' }}
     >
       <p className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)', alignSelf: 'flex-start' }}>
-        <ParamMark tone={TONE[type] || 'var(--accent)'} glyph={meta.glyph} />
+        <ParamMark tone={TONE[type] || '#2F6BFF'} id={type} />
         {meta.label}
       </p>
 
@@ -546,6 +614,7 @@ function AtmoCard({
             <span className="tabular-nums font-semibold" style={{ fontSize: '20px', lineHeight: 1, color: 'var(--text)' }}>
               {displayValue}
             </span>
+            <Trend dir={trend} />
             <span style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
               {meta.unit}
             </span>
@@ -590,17 +659,88 @@ function PullIndicator({ distance, refreshing }: { distance: number; refreshing:
   )
 }
 
+function RelayPanel({ live, canControl }: { live: LiveSnapshot | null; canControl: boolean }) {
+  const [busy, setBusy] = useState<number | null>(null)
+  const [note, setNote] = useState('')
+  const relays = live?.relays || []
+  const known = relays.length >= 10 && relays.every((r) => r.on != null)
+  const slots = Array.from({ length: 10 }, (_, i) => {
+    const found = relays.find((r) => r.id === i + 1)
+    return { id: i + 1, name: found?.name || `Relé ${i + 1}`, on: !!found?.on }
+  })
+
+  const toggle = async (id: number) => {
+    if (!canControl || !known || !live) return
+    const bits = slots.map((s) => ((s.id === id ? !s.on : s.on) ? '0' : '1')).join('')
+    setBusy(id)
+    setNote('')
+    try {
+      const res = await enqueueCommand({
+        ident: live.ident || 'POLLO_BEBE',
+        ip: live.ip || null,
+        addr: live.addr || null,
+        kind: 'relay_set',
+        bits,
+        label: `Relé ${id}`,
+      })
+      setNote(res.status === 'queued' ? `Relé ${id} encolado` : `Relé ${id} guardado: el equipo no tiene sesión`)
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : 'No se pudo enviar el relé')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="mt-8">
+      <SectionLabel>Control de relés</SectionLabel>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
+        {slots.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            disabled={!canControl || !known || busy != null}
+            onClick={() => toggle(s.id)}
+            className="rounded-[14px] p-3 text-left"
+            style={{
+              background: 'var(--surface)',
+              border: `1px solid ${s.on ? '#3AA76D' : 'var(--sep)'}`,
+              boxShadow: 'var(--shadow)',
+              opacity: canControl ? 1 : 0.85,
+            }}
+          >
+            <span className="flex items-center justify-between gap-2">
+              <span style={{ fontSize: 12, color: 'var(--text-2)' }}>R{s.id}</span>
+              <span style={{ width: 8, height: 8, borderRadius: 99, background: s.on ? '#3AA76D' : '#C5D0DE', display: 'inline-block' }} />
+            </span>
+            <span className="block mt-1" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{s.name}</span>
+            <span style={{ fontSize: 12, color: s.on ? '#1F9D55' : '#8A97A8', fontWeight: 700 }}>{busy === s.id ? '…' : s.on ? 'ON' : 'OFF'}</span>
+          </button>
+        ))}
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>
+        {canControl
+          ? known ? '0 en el bus enciende el relé. El cambio sale en la próxima ventana del equipo.' : 'Aún no hay una lectura completa de los 10 relés.'
+          : 'El monitoreo ve el estado. Solo un administrador puede cambiarlos.'}
+        {note ? ` ${note}` : ''}
+      </p>
+    </div>
+  )
+}
+
 // ── Principal ─────────────────────────────────────────────────────────────────
 export default function Principal({
   live,
   freshnessSec = 0,
   isDataStale = false,
   onRefresh,
+  canControl = false,
 }: {
   live: LiveSnapshot | null
   freshnessSec?: number
   isDataStale?: boolean
   onRefresh?: () => Promise<void> | void
+  canControl?: boolean
 } = { live: null }) {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [points, setPoints] = useState<SeriesPoint[]>([])
@@ -647,19 +787,48 @@ export default function Principal({
     else if (!isRefreshing) setPullDist(0)
   }
 
+  const held = useRef<Record<string, number>>({})
+  const keep = (key: string, value: number | null | undefined) => {
+    if (value != null && value !== 0) held.current[key] = value
+    if (value == null || value === 0) return held.current[key] ?? null
+    return value
+  }
+
+  const supply = keep('supply', live?.supply_air_c)
+  const retAir = keep('return', live?.return_air_c)
+  const humidity = keep('humidity', live?.humidity_pct)
   const setpoint = live?.setpoint_c ?? 24
   const zones: ZoneVal[] = [1, 2, 3, 4].map((id) => ({
     id,
     temp: live?.zones.find((z) => z.id === id)?.temp ?? null,
   }))
 
-  const hSupply = useMemo(() => seriesField(points, 'supply_air_c', live?.supply_air_c ?? null), [points, live?.supply_air_c])
-  const hReturn = useMemo(() => seriesField(points, 'return_air_c', live?.return_air_c ?? null), [points, live?.return_air_c])
-  const hSetpoint = useMemo(() => seriesField(points, 'setpoint_c', live?.setpoint_c ?? null), [points, live?.setpoint_c])
+  const hist = (key: keyof SeriesPoint, dropZero = false) =>
+    points.map((p) => p[key]).filter((v): v is number => typeof v === 'number' && (!dropZero || v !== 0))
 
-  const deltaOf = (hist: number[], current: number | null) => {
-    if (current == null || hist.length < 2) return 0
-    return +(current - hist[0]).toFixed(1)
+  const hSupply = useMemo(() => hist('supply_air_c', true), [points])
+  const hReturn = useMemo(() => hist('return_air_c', true), [points])
+  const hSetpoint = useMemo(() => hist('setpoint_c'), [points])
+  const hHum = useMemo(() => hist('humidity_pct', true), [points])
+  const hCo2 = useMemo(() => hist('co2_pct'), [points])
+  const hZone = [
+    useMemo(() => hist('usda1_c'), [points]),
+    useMemo(() => hist('usda2_c'), [points]),
+    useMemo(() => hist('usda3_c'), [points]),
+    useMemo(() => hist('usda4_c'), [points]),
+  ]
+
+  const trendOf = (series: number[]): 'up' | 'down' | 'flat' => {
+    if (series.length < 2) return 'flat'
+    const d = series[series.length - 1] - series[series.length - 2]
+    if (d > 0.05) return 'up'
+    if (d < -0.05) return 'down'
+    return 'flat'
+  }
+
+  const deltaOf = (series: number[], current: number | null) => {
+    if (current == null || series.length < 2) return 0
+    return +(current - series[0]).toFixed(1)
   }
 
   const overallStatus = useMemo(() => {
@@ -745,27 +914,27 @@ export default function Principal({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <AirCard
           id="supply"
-          glyph="S"
           label="Temperatura suministro"
-          value={live?.supply_air_c ?? 0}
-          delta={deltaOf(hSupply, live?.supply_air_c ?? null)}
-          history={hSupply.length ? hSupply : [live?.supply_air_c ?? 0]}
+          value={supply ?? 0}
+          trend={trendOf(hSupply)}
+          delta={deltaOf(hSupply, supply)}
+          history={hSupply.length ? hSupply : supply != null ? [supply] : []}
           stale={isStale}
-          noData={live?.supply_air_c == null}
+          noData={supply == null}
         />
         <AirCard
           id="return_"
-          glyph="R"
           label="Temperatura retorno"
-          value={live?.return_air_c ?? 0}
-          delta={deltaOf(hReturn, live?.return_air_c ?? null)}
-          history={hReturn.length ? hReturn : [live?.return_air_c ?? 0]}
+          value={retAir ?? 0}
+          trend={trendOf(hReturn)}
+          delta={deltaOf(hReturn, retAir)}
+          history={hReturn.length ? hReturn : retAir != null ? [retAir] : []}
           stale={isStale}
-          noData={live?.return_air_c == null}
+          noData={retAir == null}
         />
         <AirCard
           id="setpoint"
-          glyph="C"
+          trend={trendOf(hSetpoint)}
           label="Temperatura"
           value={live?.setpoint_c ?? 0}
           delta={0}
@@ -793,6 +962,7 @@ export default function Principal({
             id={z.id}
             temp={z.temp ?? 0}
             setpoint={setpoint}
+            trend={trendOf(hZone[z.id - 1] || [])}
             stale={isStale}
             noData={z.temp == null}
           />
@@ -812,24 +982,29 @@ export default function Principal({
         <AtmoCard
           type="co2"
           value={live?.co2_pct ?? 0}
+          trend={trendOf(hCo2)}
           co2Setpoint={live?.co2_setpoint_pct ?? null}
           stale={isStale}
           noData={live?.co2_pct == null}
         />
         <AtmoCard
           type="humidity"
-          value={live?.humidity_pct ?? 0}
+          value={humidity ?? 0}
+          trend={trendOf(hHum)}
           stale={isStale}
-          noData={live?.humidity_pct == null}
+          noData={humidity == null}
         />
         <AtmoCard
           type="motors"
           value={vent ?? 0}
+          trend="flat"
           motorSpeeds={motorSpeeds.length ? motorSpeeds : [0, 0, 0, 0]}
           stale={isStale}
           noData={vent == null}
         />
       </div>
+
+      <RelayPanel live={live} canControl={canControl} />
     </div>
   )
 }

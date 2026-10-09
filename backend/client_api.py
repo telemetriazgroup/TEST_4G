@@ -56,6 +56,15 @@ def _pick(*values: Any) -> float | None:
     return None
 
 
+def _positive(*values: Any) -> float | None:
+    """0 en suministro, retorno o humedad es trama inválida, no una lectura."""
+    for v in values:
+        n = _num(v)
+        if n is not None and n != 0:
+            return n
+    return None
+
+
 def _latest_ts(latest: dict[str, Any]) -> datetime | None:
     times: list[datetime] = []
     for kind in ("info", "relay", "mp5000"):
@@ -77,10 +86,10 @@ def build_live(
     relay = latest.get("relay") or {}
     names = names or {}
 
-    supply = _pick(info.get("supply_air_c"), mp.get("supply_air_c"))
-    ret = _pick(info.get("return_air_c"), mp.get("return_air_c"))
+    supply = _positive(info.get("supply_air_c"), mp.get("supply_air_c"))
+    ret = _positive(info.get("return_air_c"), mp.get("return_air_c"))
     sp = _pick(info.get("setpoint_c"), mp.get("setpoint_c"))
-    hum = _pick(info.get("humidity_pct"), mp.get("humidity_pct"), relay.get("humidity_pct"))
+    hum = _positive(info.get("humidity_pct"), mp.get("humidity_pct"), relay.get("humidity_pct"))
     hum_sp = _pick(info.get("humidity_setpoint_pct"), relay.get("humidity_setpoint_pct"))
     co2 = _pick(info.get("co2_pct"))
     co2_sp = _pick(info.get("co2_setpoint_pct"))
@@ -153,10 +162,10 @@ def build_series(rows: list[dict[str, Any]], hours: int = 6) -> dict[str, Any]:
         points.append(
             {
                 "ts": row.get("ts"),
-                "supply_air_c": _pick(snap.get("supply_air_c")),
-                "return_air_c": _pick(snap.get("return_air_c")),
+                "supply_air_c": _positive(snap.get("supply_air_c")),
+                "return_air_c": _positive(snap.get("return_air_c")),
                 "setpoint_c": _pick(snap.get("setpoint_c")),
-                "humidity_pct": _pick(snap.get("humidity_pct")),
+                "humidity_pct": _positive(snap.get("humidity_pct")),
                 "co2_pct": _pick(snap.get("co2_pct")),
                 "usda1_c": _pick(snap.get("usda1_c")),
                 "usda2_c": _pick(snap.get("usda2_c")),
