@@ -4,6 +4,9 @@ import Principal from './screens/Principal'
 import Configuracion from './screens/Configuracion'
 import Administracion from './screens/Administracion'
 import Historico from './screens/Historico'
+import Alertas from './screens/Alertas'
+import Comandos from './screens/Comandos'
+import Usuarios from './screens/Usuarios'
 import { fetchLive, type LiveSnapshot, type Session } from './api'
 
 const SESSION_KEY = 'ztrack_client_session'
@@ -30,7 +33,7 @@ function clearStoredSession() {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Route = 'principal' | 'configuracion' | 'administracion' | 'historico'
+type Route = 'principal' | 'avisos' | 'historico' | 'comandos' | 'usuarios' | 'configuracion' | 'administracion'
 type Dark = boolean | null // true = dark, false = light, null = system
 
 // ── SVG base props ────────────────────────────────────────────────────────────
@@ -68,6 +71,24 @@ function IcAdmin({ sz = 22 }: { sz?: number }) {
       <circle cx="9" cy="7" r="4" />
       <path d="M23 21v-2a4 4 0 00-3-3.87" />
       <path d="M16 3.13a4 4 0 010 7.75" />
+    </svg>
+  )
+}
+
+function IcBell({ sz = 22 }: { sz?: number }) {
+  return (
+    <svg width={sz} height={sz} viewBox="0 0 24 24" {...S}>
+      <path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 7h18s-3 0-3-7" />
+      <path d="M13.73 21a2 2 0 01-3.46 0" />
+    </svg>
+  )
+}
+
+function IcCmd({ sz = 22 }: { sz?: number }) {
+  return (
+    <svg width={sz} height={sz} viewBox="0 0 24 24" {...S}>
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
     </svg>
   )
 }
@@ -138,10 +159,12 @@ function IcMonitor({ sz = 18 }: { sz?: number }) {
 type NavItem = { id: Route; label: string; short: string; Icon: ({ sz }: { sz?: number }) => ReactNode }
 
 const NAV: NavItem[] = [
-  { id: 'principal',     label: 'Principal',      short: 'Principal',  Icon: IcHome },
-  { id: 'configuracion', label: 'Configuración',  short: 'Config.',    Icon: IcSettings },
-  { id: 'administracion',label: 'Administración', short: 'Admin.',     Icon: IcAdmin },
-  { id: 'historico',     label: 'Histórico',      short: 'Histórico',  Icon: IcHistory },
+  { id: 'principal',     label: 'Panel',          short: 'Panel',     Icon: IcHome },
+  { id: 'avisos',        label: 'Avisos',         short: 'Avisos',    Icon: IcBell },
+  { id: 'historico',     label: 'Histórico',      short: 'Histórico', Icon: IcHistory },
+  { id: 'comandos',      label: 'Comandos',       short: 'Comandos',  Icon: IcCmd },
+  { id: 'usuarios',      label: 'Usuarios',       short: 'Cuenta',    Icon: IcAdmin },
+  { id: 'configuracion', label: 'Configuración',  short: 'Config.',   Icon: IcSettings },
 ]
 
 // ── Connection badge ──────────────────────────────────────────────────────────
@@ -167,7 +190,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(readStoredSession)
   const [live, setLive] = useState<LiveSnapshot | null>(null)
   const [route, setRoute] = useState<Route>('principal')
-  const [dark, setDark] = useState<Dark>(null)
+  const [dark, setDark] = useState<Dark>(false)
   const [freshnessSec, setFreshnessSec] = useState(0)
   const [isDataStale, setIsDataStale] = useState(false)
   const authenticated = !!session
@@ -202,8 +225,9 @@ export default function App() {
   }, [authenticated, loadLive])
 
   useEffect(() => {
-    if (route === 'administracion' && !isAdmin) setRoute('principal')
-    if (route === 'configuracion' && !isAdmin) setRoute('principal')
+    if (!isAdmin && (route === 'administracion' || route === 'configuracion' || route === 'comandos')) {
+      setRoute('principal')
+    }
   }, [route, isAdmin])
 
   const dataTheme = dark === null ? undefined : dark ? 'dark' : 'light'
@@ -212,16 +236,18 @@ export default function App() {
   const themeLabel = dark === true ? 'Oscuro' : dark === false ? 'Claro' : 'Sistema'
 
   const navItems = NAV.filter((n) => {
-    if (n.id === 'administracion') return false
-    if (n.id === 'configuracion') return isAdmin
+    if (n.id === 'comandos' || n.id === 'configuracion') return isAdmin
     return true
   })
 
   const screens: Record<Route, ReactNode> = {
     principal:      <Principal live={live} freshnessSec={freshnessSec} isDataStale={isDataStale} onRefresh={loadLive} />,
+    avisos:         <Alertas live={live} stale={isDataStale} />,
     configuracion:  <Configuracion live={live} />,
     administracion: <Administracion />,
     historico:      <Historico ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
+    comandos:       <Comandos live={live} />,
+    usuarios:       <Usuarios username={session?.username || ''} isAdmin={isAdmin} />,
   }
 
   return (
@@ -247,25 +273,23 @@ export default function App() {
       <aside
         className="hidden md:flex flex-col shrink-0 w-16 xl:w-60 h-full z-10"
         style={{
-          backgroundColor: 'var(--surface-blur)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          borderRight: '1px solid var(--sep)',
+          backgroundColor: 'var(--sidebar)',
+          borderRight: '1px solid rgba(255,255,255,0.06)',
         }}
       >
         {/* Logo */}
         <div
           className="flex items-center justify-center xl:justify-start gap-3 xl:px-5 shrink-0"
-          style={{ height: '56px', borderBottom: '1px solid var(--sep)' }}
+          style={{ height: '56px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}
         >
-          <span style={{ color: 'var(--accent)', display: 'flex' }}>
+          <span style={{ color: '#4C8DFF', display: 'flex' }}>
             <IcThermo sz={20} />
           </span>
           <span
             className="hidden xl:block font-semibold"
-            style={{ fontSize: '15px', letterSpacing: '-0.02em', color: 'var(--text)' }}
+            style={{ fontSize: '15px', letterSpacing: '0.08em', color: '#FFFFFF' }}
           >
-            Ztrack
+            ZTRACK
           </span>
         </div>
 
@@ -281,8 +305,8 @@ export default function App() {
                 className="w-full flex items-center gap-3 rounded-[10px] mb-0.5 transition-colors justify-center xl:justify-start xl:px-3"
                 style={{
                   height: '44px',
-                  backgroundColor: active ? 'var(--nav-pill)' : 'transparent',
-                  color: active ? 'var(--text)' : 'var(--text-2)',
+                  backgroundColor: active ? 'var(--accent)' : 'transparent',
+                  color: active ? '#FFFFFF' : 'var(--sidebar-text)',
                 }}
               >
                 <span className="flex items-center justify-center w-6 h-6 shrink-0">
@@ -300,12 +324,12 @@ export default function App() {
         </nav>
 
         {/* Footer: theme toggle */}
-        <div className="p-2 shrink-0" style={{ borderTop: '1px solid var(--sep)' }}>
+        <div className="p-2 shrink-0" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
           <button
             onClick={toggleDark}
             title={themeLabel}
             className="w-full flex items-center gap-3 rounded-[10px] transition-colors justify-center xl:justify-start xl:px-3"
-            style={{ height: '44px', color: 'var(--text-2)' }}
+            style={{ height: '44px', color: 'var(--sidebar-muted)' }}
           >
             <span className="flex items-center justify-center w-6 h-6 shrink-0">
               <ThemeIc sz={18} />

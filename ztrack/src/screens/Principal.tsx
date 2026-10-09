@@ -345,20 +345,47 @@ function ConsignaBadge() {
   )
 }
 
+const TONE: Record<string, string> = {
+  supply: '#2F6BFF',
+  return_: '#0E9A8A',
+  setpoint: '#E07A2F',
+  z1: '#2F6BFF',
+  z2: '#0E9A8A',
+  z3: '#E07A2F',
+  z4: '#7B5EA7',
+  co2: '#E24B4B',
+  humidity: '#2BB3C7',
+  motors: '#3AA76D',
+}
+
+function ParamMark({ tone, glyph }: { tone: string; glyph: string }) {
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-[8px] shrink-0"
+      style={{ width: 28, height: 28, backgroundColor: `${tone}1A`, color: tone, fontSize: 14, fontWeight: 700 }}
+      aria-hidden
+    >
+      {glyph}
+    </span>
+  )
+}
+
 // ── AirCard ───────────────────────────────────────────────────────────────────
 function AirCard({
-  id, label, value, delta, history, isSetpoint = false, stale = false, noData = false,
+  id, label, value, delta, history, isSetpoint = false, stale = false, noData = false, glyph = '°',
 }: {
   id: string; label: string; value: number; delta: number;
-  history: number[]; isSetpoint?: boolean; stale?: boolean; noData?: boolean
+  history: number[]; isSetpoint?: boolean; stale?: boolean; noData?: boolean; glyph?: string
 }) {
-  const chartColor = isSetpoint ? 'var(--accent)' : 'var(--text-2)'
-  const borderStyle = isSetpoint ? '1px solid var(--accent)' : '1px solid var(--sep)'
+  const tone = TONE[id] || 'var(--accent)'
+  const chartColor = tone
+  const borderStyle = isSetpoint ? `1px solid ${tone}` : '1px solid var(--sep)'
 
   if (noData) {
     return (
       <div className="rounded-[14px] p-4 md:p-5" style={{ backgroundColor: 'var(--surface)', border: borderStyle, boxShadow: 'var(--shadow)' }}>
         <div className="flex items-center gap-2 mb-3">
+          <ParamMark tone={tone} glyph={glyph} />
           <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>{label}</span>
           {isSetpoint && <ConsignaBadge />}
         </div>
@@ -374,11 +401,12 @@ function AirCard({
       style={{ backgroundColor: 'var(--surface)', border: borderStyle, boxShadow: 'var(--shadow)', opacity: stale ? 0.68 : 1, transition: 'opacity 0.4s' }}
     >
       <div className="flex items-center gap-2">
+        <ParamMark tone={tone} glyph={glyph} />
         <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>{label}</span>
         {isSetpoint && <ConsignaBadge />}
       </div>
       <div className="flex items-baseline gap-1.5">
-        <span className="tabular-nums font-semibold text-[44px] md:text-[40px]" style={{ lineHeight: 1, color: 'var(--text)' }}>
+        <span className="tabular-nums font-semibold text-[44px] md:text-[40px]" style={{ lineHeight: 1, color: tone }}>
           {fmtTemp(value)}
         </span>
         <span style={{ fontSize: '18px', color: 'var(--text-2)' }}>°C</span>
@@ -399,13 +427,17 @@ function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
   id: number; temp: number; setpoint: number; stale?: boolean; noData?: boolean
 }) {
   const st = zoneStatus(temp, setpoint)
+  const tone = TONE[`z${id}`] || 'var(--accent)'
   const borderStyle = st === 'red' ? '2px solid var(--c-red)' : '1px solid var(--sep)'
 
   if (noData) {
     return (
       <div className="rounded-[14px] p-4" style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--sep)', boxShadow: 'var(--shadow)' }}>
         <div className="flex items-center justify-between mb-3">
-          <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>Zona {id}</span>
+          <span className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)' }}>
+            <ParamMark tone={tone} glyph={String(id)} />
+            Zona {id}
+          </span>
           <span className="rounded-full" style={{ width: '8px', height: '8px', display: 'block', backgroundColor: 'var(--c-gray)' }} />
         </div>
         <p className="tabular-nums font-semibold" style={{ fontSize: '40px', color: 'var(--c-gray)', lineHeight: 1 }}>—</p>
@@ -423,11 +455,14 @@ function ZoneCard({ id, temp, setpoint, stale = false, noData = false }: {
       style={{ backgroundColor: 'var(--surface)', border: borderStyle, boxShadow: 'var(--shadow)', opacity: stale ? 0.68 : 1, transition: 'opacity 0.4s' }}
     >
       <div className="flex items-center justify-between mb-3">
-        <span style={{ fontSize: '13px', color: 'var(--text-2)' }}>Zona {id}</span>
+        <span className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)' }}>
+          <ParamMark tone={tone} glyph={String(id)} />
+          Zona {id}
+        </span>
         <span className="rounded-full" style={{ width: '8px', height: '8px', display: 'block', backgroundColor: COLOR[st] }} />
       </div>
       <div className="flex items-baseline gap-1.5">
-        <span className="tabular-nums font-semibold text-[40px] xl:text-[36px]" style={{ lineHeight: 1, color: 'var(--text)' }}>
+        <span className="tabular-nums font-semibold text-[40px] xl:text-[36px]" style={{ lineHeight: 1, color: tone }}>
           {fmtTemp(temp)}
         </span>
         <span style={{ fontSize: '16px', color: 'var(--text-2)' }}>°C</span>
@@ -470,11 +505,11 @@ function MotorBars({ speeds }: { speeds: number[] }) {
 // ── AtmoCard ──────────────────────────────────────────────────────────────────
 type AtmoType = 'co2' | 'ventilation' | 'motors' | 'humidity'
 
-const ATMO_META: Record<AtmoType, { label: string; unit: string; max: number }> = {
-  co2:         { label: 'CO₂',              unit: '%', max: 5 },
-  ventilation: { label: 'Ventilación',      unit: '%', max: 100 },
-  motors:      { label: 'Ventilación · motores', unit: '%', max: 100 },
-  humidity:    { label: 'Humedad relativa', unit: '%', max: 100 },
+const ATMO_META: Record<AtmoType, { label: string; unit: string; max: number; glyph: string }> = {
+  co2:         { label: 'CO₂',              unit: '%', max: 5, glyph: 'CO₂' },
+  ventilation: { label: 'Ventilación',      unit: '%', max: 100, glyph: 'V' },
+  motors:      { label: 'Ventilación · motores', unit: '%', max: 100, glyph: 'M' },
+  humidity:    { label: 'Humedad relativa', unit: '%', max: 100, glyph: '%' },
 }
 
 function AtmoCard({
@@ -495,7 +530,8 @@ function AtmoCard({
       className="rounded-[14px] p-4 flex flex-col items-center gap-2"
       style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--sep)', boxShadow: 'var(--shadow)', opacity: stale ? 0.68 : 1, transition: 'opacity 0.4s' }}
     >
-      <p style={{ fontSize: '13px', color: 'var(--text-2)', alignSelf: 'flex-start' }}>
+      <p className="flex items-center gap-2" style={{ fontSize: '13px', color: 'var(--text-2)', alignSelf: 'flex-start' }}>
+        <ParamMark tone={TONE[type] || 'var(--accent)'} glyph={meta.glyph} />
         {meta.label}
       </p>
 
@@ -709,6 +745,7 @@ export default function Principal({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <AirCard
           id="supply"
+          glyph="S"
           label="Temperatura suministro"
           value={live?.supply_air_c ?? 0}
           delta={deltaOf(hSupply, live?.supply_air_c ?? null)}
@@ -718,6 +755,7 @@ export default function Principal({
         />
         <AirCard
           id="return_"
+          glyph="R"
           label="Temperatura retorno"
           value={live?.return_air_c ?? 0}
           delta={deltaOf(hReturn, live?.return_air_c ?? null)}
@@ -727,6 +765,7 @@ export default function Principal({
         />
         <AirCard
           id="setpoint"
+          glyph="C"
           label="Temperatura"
           value={live?.setpoint_c ?? 0}
           delta={0}

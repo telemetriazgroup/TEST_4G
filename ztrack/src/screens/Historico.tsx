@@ -1,436 +1,418 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { fetchSeries, type SeriesPoint } from "../api";
 
-type DataPoint = {
-  ts: number;
-  iso?: string;
-  supply: number;
-  return_: number;
-  setpoint: number;
-  z1: number;
-  z2: number;
-  z3: number;
-  z4: number;
-  humidity: number;
-  co2: number;
-  ventilation: number;
-};
+type Key =
+  | "supply"
+  | "return_"
+  | "setpoint"
+  | "z1"
+  | "z2"
+  | "z3"
+  | "z4"
+  | "humidity"
+  | "co2";
+
+type Row = { ts: number } & Record<Key, number | null>;
 
 type SeriesInfo = {
-  key: string;
+  key: Key;
   label: string;
   color: string;
-  axis: "left" | "right";
+  kind: "temp" | "hum" | "co2";
   dashed?: boolean;
 };
 
 const SERIES: SeriesInfo[] = [
-  { key: "supply", label: "Suministro", color: "#4A7ACC", axis: "left" },
-  { key: "return_", label: "Retorno", color: "#3A9B8E", axis: "left" },
-  { key: "setpoint", label: "Setpoint", color: "#9B9BA8", axis: "left", dashed: true },
-  { key: "z1", label: "Zona 1", color: "#7B5EA7", axis: "left" },
-  { key: "z2", label: "Zona 2", color: "#6B7FA0", axis: "left" },
-  { key: "z3", label: "Zona 3", color: "#C07030", axis: "left" },
-  { key: "z4", label: "Zona 4", color: "#6B8040", axis: "left" },
-  { key: "humidity", label: "Humedad", color: "#5A8A9F", axis: "right" },
-  { key: "co2", label: "CO₂", color: "#8B5E3B", axis: "right" },
-  { key: "ventilation", label: "Ventilación", color: "#5A8065", axis: "right" },
+  { key: "supply", label: "Suministro", color: "#3AA76D", kind: "temp" },
+  { key: "return_", label: "Retorno", color: "#E24B4B", kind: "temp" },
+  { key: "setpoint", label: "Set temperatura", color: "#D4A017", kind: "temp", dashed: true },
+  { key: "z1", label: "Zona 1", color: "#2F6BFF", kind: "temp" },
+  { key: "z2", label: "Zona 2", color: "#0E9A8A", kind: "temp" },
+  { key: "z3", label: "Zona 3", color: "#E07A2F", kind: "temp" },
+  { key: "z4", label: "Zona 4", color: "#7B5EA7", kind: "temp" },
+  { key: "humidity", label: "Humedad relativa", color: "#2BB3C7", kind: "hum" },
+  { key: "co2", label: "CO₂", color: "#8B5E3B", kind: "co2" },
 ];
 
-function seriesToPoints(rows: SeriesPoint[], rangeStart: Date): DataPoint[] {
-  return rows
+const CHART_VIEWS: { id: string; label: string; keys: Key[] }[] = [
+  { id: "estandar", label: "Estándar", keys: ["supply", "return_", "setpoint"] },
+  { id: "zonas", label: "Zonas", keys: ["z1", "z2", "z3", "z4", "setpoint"] },
+  { id: "gases", label: "Gases y humedad", keys: ["humidity", "co2"] },
+  { id: "completo", label: "Completo", keys: SERIES.map((s) => s.key) },
+];
+
+const TABLE_VIEWS: { id: string; label: string; keys: Key[]; hours?: number }[] = [
+  { id: "12h", label: "Últimas 12 h", keys: ["supply", "return_", "humidity", "co2", "setpoint"], hours: 12 },
+  { id: "basico", label: "Básico (Temp, HR, CO₂)", keys: ["supply", "return_", "humidity", "co2", "setpoint"] },
+  { id: "temps", label: "Solo temperaturas", keys: ["supply", "return_", "setpoint", "z1", "z2", "z3", "z4"] },
+  { id: "gases", label: "Gases y humedad", keys: ["humidity", "co2", "setpoint"] },
+  { id: "completo", label: "Completo", keys: SERIES.map((s) => s.key) },
+];
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function toRows(points: SeriesPoint[]): Row[] {
+  return points
     .map((p) => {
-      const t = new Date(p.ts);
-      const ts = Math.round((t.getTime() - rangeStart.getTime()) / 60000);
+      const ts = new Date(p.ts).getTime();
       return {
         ts,
-        iso: p.ts,
-        supply: p.supply_air_c ?? 0,
-        return_: p.return_air_c ?? 0,
-        setpoint: p.setpoint_c ?? 0,
-        z1: p.usda1_c ?? 0,
-        z2: p.usda2_c ?? 0,
-        z3: p.usda3_c ?? 0,
-        z4: p.usda4_c ?? 0,
-        humidity: p.humidity_pct ?? 0,
-        co2: p.co2_pct ?? 0,
-        ventilation: 0,
+        supply: num(p.supply_air_c),
+        return_: num(p.return_air_c),
+        setpoint: num(p.setpoint_c),
+        z1: num(p.usda1_c),
+        z2: num(p.usda2_c),
+        z3: num(p.usda3_c),
+        z4: num(p.usda4_c),
+        humidity: num(p.humidity_pct),
+        co2: num(p.co2_pct),
       };
     })
-    .filter((d) => Number.isFinite(d.ts));
+    .filter((r) => Number.isFinite(r.ts))
+    .sort((a, b) => a.ts - b.ts);
 }
 
-function fmtTs(ts: number): string {
-  const h = Math.floor(ts / 60) % 24;
-  const m = Math.abs(ts % 60);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+function pad(n: number) {
+  return String(n).padStart(2, "0");
 }
 
-function fmtPointTime(d: DataPoint): string {
-  if (d.iso) {
-    const t = new Date(d.iso);
-    if (!Number.isNaN(t.getTime())) {
-      return `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
-    }
-  }
-  return fmtTs(d.ts);
+function toDT(d: Date) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function toDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function fmtStamp(ts: number) {
+  const d = new Date(ts);
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function toDTStr(d: Date): string {
-  return `${toDateStr(d)}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+function fmtAxisTime(ts: number) {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-type ChartProps = {
-  data: DataPoint[];
-  activeSeries: Set<string>;
+function hoursAgo(h: number) {
+  return toDT(new Date(Date.now() - h * 3600000));
+}
+
+function dispTemp(c: number, unit: "C" | "F") {
+  return unit === "F" ? c * 9 / 5 + 32 : c;
+}
+
+function fmtNum(v: number | null, digits = 1) {
+  return v == null ? "—" : v.toFixed(digits);
+}
+
+const card: CSSProperties = {
+  background: "#fff",
+  border: "1px solid #E3E8EF",
+  borderRadius: 12,
+  boxShadow: "0 1px 2px rgba(18,38,63,0.05)",
+};
+
+const field: CSSProperties = {
+  width: "100%",
+  height: 36,
+  borderRadius: 8,
+  border: "1px solid #D5DEE8",
+  padding: "0 10px",
+  color: "#1B2430",
+  background: "#fff",
+  fontSize: 13,
+};
+
+const btn: CSSProperties = {
+  width: "100%",
+  height: 38,
+  borderRadius: 8,
+  border: "1px solid #D5DEE8",
+  background: "#fff",
+  color: "#1B2430",
+  fontWeight: 600,
+  fontSize: 13,
+};
+
+function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function Chart({
+  rows,
+  active,
+  showValues,
+  unit,
+  xMin,
+  xMax,
+  onZoom,
+}: {
+  rows: Row[];
+  active: SeriesInfo[];
+  showValues: Set<Key>;
+  unit: "C" | "F";
   xMin: number;
   xMax: number;
   onZoom: (a: number, b: number) => void;
-  isZoomed: boolean;
-  onResetZoom: () => void;
-  isMobile: boolean;
-};
-
-function SVGChart({ data, activeSeries, xMin, xMax, onZoom, isZoomed, onResetZoom, isMobile }: ChartProps) {
-  const cRef = useRef<HTMLDivElement>(null);
-  const [cw, setCw] = useState(600);
-  const [fs, setFs] = useState(false);
-  const ch = isMobile ? 260 : 380;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [cw, setCw] = useState(720);
+  const drag = useRef<{ sx: number; sts: number; on: boolean } | null>(null);
+  const [band, setBand] = useState<{ x1: number; x2: number } | null>(null);
+  const [tip, setTip] = useState<{ x: number; row: Row } | null>(null);
 
   useEffect(() => {
     const obs = new ResizeObserver((es) => {
       const w = es[0]?.contentRect.width;
       if (w) setCw(Math.floor(w));
     });
-    if (cRef.current) obs.observe(cRef.current);
+    if (box.current) obs.observe(box.current);
     return () => obs.disconnect();
-  }, [fs]);
+  }, []);
 
-  const [tip, setTip] = useState<{ x: number; y: number; pt: DataPoint } | null>(null);
-  const drag = useRef<{ sx: number; sts: number; cx: number; on: boolean } | null>(null);
-  const [dprev, setDprev] = useState<{ x1: number; x2: number } | null>(null);
-
-  const PL = 48, PR = 48, PT = 12, PB = 30;
-  const iW = cw - PL - PR;
+  const ch = 420;
+  const hasHum = active.some((s) => s.kind === "hum");
+  const hasCo2 = active.some((s) => s.kind === "co2");
+  const PL = 52;
+  const PR = 16 + (hasHum ? 36 : 0) + (hasCo2 ? 36 : 0);
+  const PT = 16;
+  const PB = 32;
+  const iW = Math.max(10, cw - PL - PR);
   const iH = ch - PT - PB;
 
-  const scX = (ts: number) => PL + ((ts - xMin) / (xMax - xMin || 1)) * iW;
-  const scYL = (v: number) => PT + (1 - (v - 19) / 11) * iH;
-  const scYR = (v: number) => PT + (1 - v / 100) * iH;
+  const visible = rows.filter((r) => r.ts >= xMin && r.ts <= xMax);
+  const temps = visible.flatMap((r) =>
+    active.filter((s) => s.kind === "temp").map((s) => r[s.key]).filter((v): v is number => v != null).map((v) => dispTemp(v, unit))
+  );
+  let y0 = temps.length ? Math.min(...temps) : unit === "F" ? 60 : 15;
+  let y1 = temps.length ? Math.max(...temps) : unit === "F" ? 90 : 35;
+  const padY = Math.max(unit === "F" ? 2 : 1, (y1 - y0) * 0.12);
+  y0 -= padY;
+  y1 += padY;
+  const co2Vals = visible.map((r) => r.co2).filter((v): v is number => v != null);
+  const co2Max = Math.max(2, ...(co2Vals.length ? co2Vals : [2])) * 1.15;
 
-  const filt = useMemo(() => data.filter((d) => d.ts >= xMin && d.ts <= xMax), [data, xMin, xMax]);
+  const sx = (ts: number) => PL + ((ts - xMin) / (xMax - xMin || 1)) * iW;
+  const syT = (v: number) => PT + (1 - (dispTemp(v, unit) - y0) / (y1 - y0 || 1)) * iH;
+  const syH = (v: number) => PT + (1 - v / 100) * iH;
+  const syC = (v: number) => PT + (1 - v / co2Max) * iH;
+  const sy = (s: SeriesInfo, v: number) => (s.kind === "hum" ? syH(v) : s.kind === "co2" ? syC(v) : syT(v));
 
-  const getV = (d: DataPoint, k: string): number => {
-    if (k === "co2") return d.co2 * 20;
-    return (d as unknown as Record<string, number>)[k];
+  const polys = (s: SeriesInfo) => {
+    const parts: string[] = [];
+    let cur: string[] = [];
+    for (const r of visible) {
+      const v = r[s.key];
+      if (v == null) {
+        if (cur.length > 1) parts.push(cur.join(" "));
+        cur = [];
+        continue;
+      }
+      cur.push(`${sx(r.ts).toFixed(1)},${sy(s, v).toFixed(1)}`);
+    }
+    if (cur.length > 1) parts.push(cur.join(" "));
+    return parts;
   };
 
-  const scY = (k: string) => (SERIES.find((s) => s.key === k)?.axis === "right" ? scYR : scYL);
+  const ticks = 5;
+  const yTicks = Array.from({ length: ticks }, (_, i) => y0 + ((y1 - y0) * i) / (ticks - 1));
+  const xTicks = Array.from({ length: 6 }, (_, i) => xMin + ((xMax - xMin) * i) / 5);
 
-  const polyPts = (k: string) =>
-    filt.map((d) => `${scX(d.ts).toFixed(1)},${scY(k)(getV(d, k)).toFixed(1)}`).join(" ");
-
-  const onMv = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (isMobile) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const mx = e.clientX - r.left;
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
     if (drag.current) {
-      if (Math.abs(mx - drag.current.sx) > 20) drag.current.on = true;
-      drag.current.cx = mx;
-      if (drag.current.on) {
-        setDprev({ x1: Math.min(drag.current.sx, mx), x2: Math.max(drag.current.sx, mx) });
-        setTip(null);
-      }
+      if (Math.abs(mx - drag.current.sx) > 8) drag.current.on = true;
+      if (drag.current.on) setBand({ x1: Math.min(drag.current.sx, mx), x2: Math.max(drag.current.sx, mx) });
       return;
     }
-    if (!filt.length) return;
+    if (!visible.length || mx < PL || mx > cw - PR) {
+      setTip(null);
+      return;
+    }
     const ts = xMin + ((mx - PL) / iW) * (xMax - xMin);
-    const pt = filt.reduce((p, c) => (Math.abs(c.ts - ts) < Math.abs(p.ts - ts) ? c : p));
-    setTip({ x: scX(pt.ts), y: e.clientY - r.top, pt });
+    const row = visible.reduce((p, c) => (Math.abs(c.ts - ts) < Math.abs(p.ts - ts) ? c : p));
+    setTip({ x: sx(row.ts), row });
   };
 
-  const onLv = () => {
-    setTip(null);
-    drag.current = null;
-    setDprev(null);
-  };
-
-  const onDn = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (isMobile) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const mx = e.clientX - r.left;
+  const onDown = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
     const ts = xMin + ((mx - PL) / iW) * (xMax - xMin);
-    drag.current = { sx: mx, sts: ts, cx: mx, on: false };
+    drag.current = { sx: mx, sts: ts, on: false };
     setTip(null);
   };
 
-  const onUp = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (isMobile || !drag.current) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const mx = e.clientX - r.left;
-    if (drag.current.on && Math.abs(mx - drag.current.sx) > 20) {
+  const onUp = (e: MouseEvent<SVGSVGElement>) => {
+    if (!drag.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    if (drag.current.on && Math.abs(mx - drag.current.sx) > 12) {
       const ets = xMin + ((mx - PL) / iW) * (xMax - xMin);
-      const a = Math.max(0, Math.min(drag.current.sts, ets));
-      const b = Math.min(1440, Math.max(drag.current.sts, ets));
-      if (b - a > 10) onZoom(a, b);
+      const a = Math.min(drag.current.sts, ets);
+      const b = Math.max(drag.current.sts, ets);
+      if (b - a > 60_000) onZoom(a, b);
     }
     drag.current = null;
-    setDprev(null);
+    setBand(null);
   };
 
-  const yVals = [19, 22, 24, 27, 30];
-  const rVals = [0, 25, 50, 75, 100];
-  const nTk = 6;
-  const tkStep = (xMax - xMin) / nTk;
-  const ax1 = Math.max(PL, scX(180));
-  const ax2 = Math.min(cw - PR, scX(240));
-
-  const svgEl = (
-    <svg
-      width={cw}
-      height={ch}
-      style={{ display: "block", userSelect: "none", cursor: isMobile ? "default" : "crosshair" }}
-      onMouseMove={onMv}
-      onMouseLeave={onLv}
-      onMouseDown={onDn}
-      onMouseUp={onUp}
-    >
-      <defs>
-        <clipPath id="hChartClip">
-          <rect x={PL} y={PT} width={iW} height={iH} />
-        </clipPath>
-      </defs>
-
-      {yVals.map((v) => (
-        <line key={v} x1={PL} y1={scYL(v)} x2={cw - PR} y2={scYL(v)} stroke="rgba(0,0,0,0.07)" strokeWidth={1} />
-      ))}
-
-      {Array.from({ length: nTk + 1 }, (_, i) => {
-        const ts = xMin + i * tkStep;
-        const x = scX(ts);
-        const label = fmtTs(Math.max(0, Math.round(ts / 5) * 5));
-        return (
-          <g key={i}>
-            <line x1={x} y1={PT} x2={x} y2={ch - PB} stroke="rgba(0,0,0,0.07)" strokeWidth={1} />
-            <text x={x} y={ch - PB + 14} textAnchor="middle" fontSize={9} fill="var(--text-2)">
-              {label}
-            </text>
-          </g>
-        );
-      })}
-
-      {ax1 < ax2 && (
-        <rect x={ax1} y={PT} width={ax2 - ax1} height={iH} fill="rgba(255,59,48,0.07)" />
-      )}
-
-      {yVals.map((v) => (
-        <text key={v} x={PL - 6} y={scYL(v) + 4} textAnchor="end" fontSize={10} fill="var(--text-2)">
-          {v}
-        </text>
-      ))}
-      {rVals.map((v) => (
-        <text key={v} x={cw - PR + 6} y={scYR(v) + 4} textAnchor="start" fontSize={10} fill="var(--text-2)">
-          {v}
-        </text>
-      ))}
-      <text x={PL - 6} y={PT - 2} textAnchor="end" fontSize={9} fill="var(--text-2)">°C</text>
-      <text x={cw - PR + 6} y={PT - 2} textAnchor="start" fontSize={9} fill="var(--text-2)">%</text>
-
-      <g clipPath="url(#hChartClip)">
-        {SERIES.filter((s) => activeSeries.has(s.key)).map((s) => (
-          <polyline
-            key={s.key}
-            points={polyPts(s.key)}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={s.dashed ? 1.5 : 2}
-            strokeDasharray={s.dashed ? "4,3" : undefined}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        ))}
-      </g>
-
-      {tip && (
-        <line
-          x1={tip.x} y1={PT} x2={tip.x} y2={ch - PB}
-          stroke="rgba(0,0,0,0.25)" strokeWidth={1} strokeDasharray="3,3"
-        />
-      )}
-
-      {dprev && (
-        <rect
-          x={dprev.x1} y={PT} width={dprev.x2 - dprev.x1} height={iH}
-          fill="rgba(0,113,227,0.1)" stroke="rgba(0,113,227,0.3)" strokeWidth={1}
-        />
-      )}
-    </svg>
-  );
-
-  const tipEl = tip && !dprev ? (
-    <div style={{
-      position: "absolute",
-      left: tip.x + 14 > cw - 160 ? tip.x - 162 : tip.x + 14,
-      top: Math.max(0, tip.y - 80),
-      background: "var(--surface)",
-      border: "1px solid var(--sep)",
-      borderRadius: 10,
-      padding: "8px 12px",
-      boxShadow: "var(--shadow)",
-      zIndex: 20,
-      pointerEvents: "none",
-      minWidth: 152,
-    }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
-        {fmtPointTime(tip.pt)}
-      </div>
-      {SERIES.filter((s) => activeSeries.has(s.key)).map((s) => {
-        const raw = (tip.pt as unknown as Record<string, number>)[s.key];
-        const dv =
-          s.key === "co2"
-            ? raw.toFixed(1) + " %"
-            : s.axis === "right"
-            ? raw.toFixed(1) + "%"
-            : raw.toFixed(1) + "°C";
-        return (
-          <div key={s.key} style={{ display: "flex", gap: 6, fontSize: 11, marginBottom: 2, alignItems: "center" }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.color, flexShrink: 0, display: "inline-block" }} />
-            <span style={{ flex: 1, color: "var(--text-2)" }}>{s.label}</span>
-            <span style={{ fontWeight: 500, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>{dv}</span>
-          </div>
-        );
-      })}
-    </div>
-  ) : null;
-
-  if (fs) {
-    return (
-      <div style={{ position: "fixed", inset: 0, zIndex: 50, background: "var(--bg)", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--sep)", background: "var(--surface)" }}>
-          <span style={{ fontWeight: 600, fontSize: 14, color: "var(--text)" }}>Gráfica histórica</span>
-          <button
-            onClick={() => setFs(false)}
-            style={{ background: "none", border: "none", fontSize: 22, color: "var(--text)", cursor: "pointer", minHeight: 44, minWidth: 44, display: "flex", alignItems: "center", justifyContent: "center" }}
-          >
-            ×
-          </button>
-        </div>
-        <div style={{ padding: "6px 12px", fontSize: 11, color: "var(--text-2)", background: "var(--surface)", borderBottom: "1px solid var(--sep)" }}>
-          Gira el dispositivo a horizontal para mejor visualización
-        </div>
-        <div style={{ flex: 1, position: "relative", overflow: "hidden" }} ref={cRef}>
-          {svgEl}
-        </div>
-      </div>
-    );
-  }
+  const labelEvery = Math.max(1, Math.floor(visible.length / 8));
 
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, minHeight: 36 }}>
-        <div>
-          {isZoomed && !isMobile && (
-            <button
-              onClick={onResetZoom}
-              style={{ background: "var(--surface)", border: "1px solid var(--sep)", borderRadius: 6, padding: "5px 12px", fontSize: 12, color: "var(--accent)", cursor: "pointer" }}
-            >
-              Restablecer zoom
-            </button>
-          )}
-        </div>
-        {isMobile && (
-          <button
-            onClick={() => setFs(true)}
-            style={{ background: "none", border: "1px solid var(--sep)", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "var(--text-2)", cursor: "pointer", minHeight: 44 }}
-          >
-            Ver a pantalla completa
-          </button>
+    <div ref={box} style={{ width: "100%", position: "relative" }}>
+      <svg
+        width={cw}
+        height={ch}
+        style={{ display: "block", cursor: "crosshair", userSelect: "none" }}
+        onMouseMove={onMove}
+        onMouseLeave={() => {
+          setTip(null);
+          drag.current = null;
+          setBand(null);
+        }}
+        onMouseDown={onDown}
+        onMouseUp={onUp}
+      >
+        {yTicks.map((v, i) => {
+          const y = PT + (1 - (v - y0) / (y1 - y0 || 1)) * iH;
+          return (
+            <g key={i}>
+              <line x1={PL} x2={cw - PR} y1={y} y2={y} stroke="#EEF2F6" />
+              <text x={PL - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#8A97A8">
+                {v.toFixed(0)}
+              </text>
+            </g>
+          );
+        })}
+        {hasHum &&
+          [0, 50, 100].map((v) => (
+            <text key={`h${v}`} x={cw - (hasCo2 ? 40 : 6)} y={syH(v) + 4} textAnchor="end" fontSize="11" fill="#2BB3C7">
+              {v}
+            </text>
+          ))}
+        {hasCo2 &&
+          [0, co2Max / 2, co2Max].map((v, i) => (
+            <text key={`c${i}`} x={cw - 6} y={syC(v) + 4} textAnchor="end" fontSize="11" fill="#8B5E3B">
+              {v.toFixed(1)}
+            </text>
+          ))}
+        {active.map((s) =>
+          polys(s).map((pts, i) => (
+            <polyline
+              key={`${s.key}-${i}`}
+              points={pts}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={s.dashed ? 1.6 : 2}
+              strokeDasharray={s.dashed ? "5 4" : undefined}
+            />
+          ))
         )}
-      </div>
-      <div ref={cRef} style={{ position: "relative" }}>
-        {svgEl}
-        {tipEl}
-      </div>
+        {active.map((s) =>
+          showValues.has(s.key)
+            ? visible.map((r, i) => {
+                const v = r[s.key];
+                if (v == null || i % labelEvery !== 0) return null;
+                const text = s.kind === "temp" ? dispTemp(v, unit).toFixed(1) : v.toFixed(s.kind === "co2" ? 2 : 0);
+                return (
+                  <text
+                    key={`${s.key}-v-${i}`}
+                    x={sx(r.ts)}
+                    y={sy(s, v) - 6}
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill={s.color}
+                    stroke="#fff"
+                    strokeWidth="3"
+                    paintOrder="stroke"
+                  >
+                    {text}
+                  </text>
+                );
+              })
+            : null
+        )}
+        {xTicks.map((ts, i) => (
+          <text key={i} x={sx(ts)} y={ch - 8} textAnchor="middle" fontSize="11" fill="#8A97A8">
+            {fmtAxisTime(ts)}
+          </text>
+        ))}
+        {band && <rect x={band.x1} y={PT} width={band.x2 - band.x1} height={iH} fill="rgba(47,107,255,0.12)" />}
+        {tip && <line x1={tip.x} x2={tip.x} y1={PT} y2={PT + iH} stroke="#C5D0DE" strokeDasharray="3 3" />}
+      </svg>
+      {tip && (
+        <div
+          style={{
+            position: "absolute",
+            left: Math.min(tip.x + 12, cw - 180),
+            top: 24,
+            background: "#fff",
+            border: "1px solid #E3E8EF",
+            borderRadius: 10,
+            padding: "8px 10px",
+            boxShadow: "0 8px 24px rgba(18,38,63,0.12)",
+            fontSize: 12,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ color: "#66758A", marginBottom: 4 }}>{fmtStamp(tip.row.ts)}</div>
+          {active.map((s) => (
+            <div key={s.key} style={{ color: s.color, fontWeight: 600 }}>
+              {s.label}: {s.kind === "temp" ? (tip.row[s.key] == null ? "—" : dispTemp(tip.row[s.key] as number, unit).toFixed(1) + "°") : fmtNum(tip.row[s.key], s.kind === "co2" ? 2 : 0)}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function Historico({ ident = "POLLO_BEBE" }: { ident?: string }) {
-  const [data, setData] = useState<DataPoint[]>([]);
+  const [mode, setMode] = useState<"grafico" | "tabla">("grafico");
+  const [unit, setUnit] = useState<"C" | "F">("C");
+  const [startIn, setStartIn] = useState(() => hoursAgo(12));
+  const [endIn, setEndIn] = useState(() => toDT(new Date()));
+  const [query, setQuery] = useState(() => ({ start: hoursAgo(12), end: toDT(new Date()) }));
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const baseDate = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }, []);
-
-  const todayRef = useMemo(() => new Date(), []);
-
-  const endDate = useMemo(() => new Date(baseDate.getTime() + 24 * 3600 * 1000), [baseDate]);
-
-  const [mob, setMob] = useState(() => window.innerWidth < 768);
+  const [err, setErr] = useState("");
+  const [view, setView] = useState("estandar");
+  const [tableView, setTableView] = useState("12h");
+  const [active, setActive] = useState<Set<Key>>(() => new Set(["supply", "return_", "setpoint"]));
+  const [cols, setCols] = useState<Set<Key>>(() => new Set(["supply", "return_", "humidity", "co2", "setpoint"]));
+  const [showValues, setShowValues] = useState<Set<Key>>(new Set());
+  const [findVar, setFindVar] = useState("");
+  const [zoom, setZoom] = useState<{ a: number; b: number } | null>(null);
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState("");
 
   useEffect(() => {
-    const h = () => setMob(window.innerWidth < 768);
-    window.addEventListener("resize", h);
-    return () => window.removeEventListener("resize", h);
-  }, []);
-
-  const [toast, setToast] = useState<string | null>(null);
-  const [genning, setGenning] = useState(false);
-
-  const [rStart, setRStart] = useState(() => toDateStr(baseDate));
-  const [rEnd, setREnd] = useState(() => toDateStr(todayRef));
-  const [rFmt, setRFmt] = useState<"PDF" | "CSV">("PDF");
-
-  const [acts, setActs] = useState<Set<string>>(() =>
-    new Set(window.innerWidth < 768 ? ["supply", "return_", "setpoint"] : ["supply", "return_", "setpoint", "z3"])
-  );
-
-  const [xMin, setXMin] = useState(0);
-  const [xMax, setXMax] = useState(1440);
-  const [zoomed, setZoomed] = useState(false);
-
-  const [csStart, setCsStart] = useState(() => toDTStr(baseDate));
-  const [csEnd, setCsEnd] = useState(() => toDTStr(endDate));
-
-  const [tInt, setTInt] = useState("5");
-  const [tSrch, setTSrch] = useState("");
-  const [tPage, setTPage] = useState(0);
-  const [selRow, setSelRow] = useState<DataPoint | null>(null);
-
-  useEffect(() => {
-    const start = new Date(`${rStart}T00:00:00`);
-    const end = new Date(`${rEnd}T23:59:59`);
+    const start = new Date(query.start);
+    const end = new Date(query.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      setErr("El periodo no es válido");
+      setLoading(false);
+      return;
+    }
     const hours = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 3600000));
     let cancel = false;
     setLoading(true);
+    setErr("");
     fetchSeries(hours, ident, start.toISOString(), end.toISOString())
-      .then((rows) => {
+      .then((points) => {
         if (cancel) return;
-        const pts = seriesToPoints(rows, start).filter((d) => {
-          if (!d.iso) return d.ts >= 0;
-          const t = new Date(d.iso).getTime();
-          return t >= start.getTime() && t <= end.getTime();
-        });
-        setData(pts);
-        if (pts.length) {
-          setXMin(pts[0].ts);
-          setXMax(pts[pts.length - 1].ts);
-        } else {
-          setXMin(0);
-          setXMax(Math.max(60, hours * 60));
-        }
-        setZoomed(false);
+        const next = toRows(points).filter((r) => r.ts >= start.getTime() && r.ts <= end.getTime());
+        setRows(next);
+        setZoom(null);
+        setPage(0);
       })
       .catch(() => {
-        if (!cancel) setData([]);
+        if (!cancel) setErr("No se pudo leer el histórico");
       })
       .finally(() => {
         if (!cancel) setLoading(false);
@@ -438,560 +420,285 @@ export default function Historico({ ident = "POLLO_BEBE" }: { ident?: string }) 
     return () => {
       cancel = true;
     };
-  }, [rStart, rEnd, ident]);
+  }, [query, ident]);
 
-  const PG = 50;
+  const domain = useMemo(() => {
+    if (!rows.length) return { min: Date.now() - 3600000, max: Date.now() };
+    return { min: rows[0].ts, max: rows[rows.length - 1].ts };
+  }, [rows]);
+  const xMin = zoom?.a ?? domain.min;
+  const xMax = zoom?.b ?? domain.max;
+  const shown = SERIES.filter((s) => active.has(s.key));
+  const filteredSeries = SERIES.filter((s) => s.label.toLowerCase().includes(findVar.trim().toLowerCase()));
+  const tableSeries = SERIES.filter((s) => cols.has(s.key));
 
-  const toggle = (k: string) => {
-    setActs((prev) => {
-      const n = new Set(prev);
-      n.has(k) ? n.delete(k) : n.add(k);
-      return n;
-    });
+  const tableRows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return rows.filter((r) => !needle || fmtStamp(r.ts).toLowerCase().includes(needle));
+  }, [rows, q]);
+  const pageSize = 40;
+  const pages = Math.max(1, Math.ceil(tableRows.length / pageSize));
+  const pageRows = tableRows.slice(page * pageSize, (page + 1) * pageSize);
+
+  const applyView = (id: string) => {
+    const found = CHART_VIEWS.find((v) => v.id === id);
+    if (!found) return;
+    setView(id);
+    setActive(new Set(found.keys));
   };
 
-  const doGen = () => {
-    setGenning(true);
-    setTimeout(() => {
-      setGenning(false);
-      setToast("Reporte generado");
-      setTimeout(() => setToast(null), 3000);
-    }, 1500);
-  };
-
-  const resetZoom = () => {
-    setXMin(0);
-    setXMax(1440);
-    setZoomed(false);
-    setCsStart(toDTStr(baseDate));
-    setCsEnd(toDTStr(endDate));
-  };
-
-  const onCsS = (v: string) => {
-    setCsStart(v);
-    const ms = new Date(v).getTime() - baseDate.getTime();
-    const nm = Math.max(0, Math.min(1440, ms / 60000));
-    setXMin(nm);
-    setZoomed(nm > 0 || xMax < 1440);
-  };
-
-  const onCsE = (v: string) => {
-    setCsEnd(v);
-    const ms = new Date(v).getTime() - baseDate.getTime();
-    const nm = Math.max(0, Math.min(1440, ms / 60000));
-    setXMax(nm);
-    setZoomed(xMin > 0 || nm < 1440);
-  };
-
-  const onZoom = (a: number, b: number) => {
-    setXMin(a);
-    setXMax(b);
-    setZoomed(true);
-    setCsStart(toDTStr(new Date(baseDate.getTime() + a * 60000)));
-    setCsEnd(toDTStr(new Date(baseDate.getTime() + b * 60000)));
-  };
-
-  const applyChip = (label: string) => {
-    const tod = new Date();
-    tod.setHours(0, 0, 0, 0);
-    const yes = new Date(tod);
-    yes.setDate(yes.getDate() - 1);
-    if (label === "Hoy") {
-      setRStart(toDateStr(tod));
-      setREnd(toDateStr(tod));
-    } else if (label === "Ayer") {
-      setRStart(toDateStr(yes));
-      setREnd(toDateStr(yes));
-    } else if (label === "Últimos 7 días") {
-      const w = new Date(tod);
-      w.setDate(w.getDate() - 7);
-      setRStart(toDateStr(w));
-      setREnd(toDateStr(tod));
-    } else {
-      setRStart(toDateStr(yes));
-      setREnd(toDateStr(tod));
+  const applyTableView = (id: string) => {
+    const found = TABLE_VIEWS.find((v) => v.id === id);
+    if (!found) return;
+    setTableView(id);
+    setCols(new Set(found.keys));
+    if (found.hours) {
+      const start = hoursAgo(found.hours);
+      const end = toDT(new Date());
+      setStartIn(start);
+      setEndIn(end);
+      setQuery({ start, end });
     }
-    resetZoom();
   };
 
-  const tData = useMemo(() => {
-    const stepMin = Math.max(1, parseInt(tInt, 10) || 5);
-    let last = -Infinity;
-    return data.filter((d) => {
-      if (d.ts < xMin || d.ts > xMax) return false;
-      if (d.ts - last < stepMin) return false;
-      last = d.ts;
-      const q = tSrch.toLowerCase().trim();
-      return q === "" || fmtPointTime(d).includes(q);
-    });
-  }, [data, xMin, xMax, tInt, tSrch]);
-
-  useEffect(() => {
-    setTPage(0);
-  }, [tSrch, tInt, xMin, xMax]);
-
-  const totPg = Math.ceil(tData.length / PG);
-  const pgDat = tData.slice(tPage * PG, (tPage + 1) * PG);
-
-  const cc = (d: DataPoint, k: string): string | undefined => {
-    if (["z1", "z2", "z3", "z4"].includes(k)) {
-      const v = (d as unknown as Record<string, number>)[k];
-      if (v > d.setpoint + 1.5) return "var(--c-red)";
-      if (v > d.setpoint + 0.8) return "var(--c-amber)";
-    }
-    if (k === "co2") {
-      if (d.co2 > 1.5) return "var(--c-red)";
-      if (d.co2 > 0.8) return "var(--c-amber)";
-    }
-    return undefined;
+  const toggle = (set: Set<Key>, key: Key, write: (n: Set<Key>) => void) => {
+    const n = new Set(set);
+    n.has(key) ? n.delete(key) : n.add(key);
+    write(n);
   };
 
-  const chips = ["Viaje actual", "Hoy", "Ayer", "Últimos 7 días"];
+  const exportRows = () => tableRows;
+  const fileBase = `historico_${ident}_${query.start.slice(0, 10)}_${query.end.slice(0, 10)}`;
 
-  const inpBase: React.CSSProperties = {
-    background: "var(--bg)",
-    border: "1px solid var(--sep)",
-    borderRadius: 8,
-    padding: "0 10px",
-    color: "var(--text)",
-    outline: "none",
+  const downloadCsv = () => {
+    const head = ["Fecha / Hora", ...tableSeries.map((s) => s.label)];
+    const lines = exportRows().map((r) =>
+      [fmtStamp(r.ts), ...tableSeries.map((s) => (s.kind === "temp" && r[s.key] != null ? dispTemp(r[s.key] as number, unit).toFixed(1) : fmtNum(r[s.key], s.kind === "co2" ? 2 : 1)))].join(";")
+    );
+    downloadBlob(`${fileBase}.csv`, new Blob(["\uFEFF" + [head.join(";"), ...lines].join("\n")], { type: "text/csv;charset=utf-8" }));
   };
 
-  const pillBtn: React.CSSProperties = {
-    background: "var(--nav-pill)",
-    color: "var(--text)",
-    border: "none",
-    borderRadius: 20,
-    padding: "8px 14px",
-    fontSize: 13,
-    cursor: "pointer",
-    minHeight: 44,
-    whiteSpace: "nowrap",
+  const downloadExcel = () => {
+    const head = ["Fecha / Hora", ...tableSeries.map((s) => s.label)].map((h) => `<th>${h}</th>`).join("");
+    const body = exportRows()
+      .map((r) => {
+        const cells = [fmtStamp(r.ts), ...tableSeries.map((s) => (s.kind === "temp" && r[s.key] != null ? dispTemp(r[s.key] as number, unit).toFixed(1) : fmtNum(r[s.key], s.kind === "co2" ? 2 : 1)))];
+        return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+      })
+      .join("");
+    const html = `<html><head><meta charset="utf-8"></head><body><table border="1"><tr>${head}</tr>${body}</table></body></html>`;
+    downloadBlob(`${fileBase}.xls`, new Blob([html], { type: "application/vnd.ms-excel" }));
   };
 
-  const card: React.CSSProperties = {
-    background: "var(--surface)",
-    border: "1px solid var(--sep)",
-    borderRadius: 14,
-    boxShadow: "var(--shadow)",
-    padding: 16,
+  const downloadPdf = () => {
+    const head = ["Fecha / Hora", ...tableSeries.map((s) => s.label)];
+    const body = exportRows()
+      .map((r) => {
+        const cells = [fmtStamp(r.ts), ...tableSeries.map((s) => (s.kind === "temp" && r[s.key] != null ? dispTemp(r[s.key] as number, unit).toFixed(1) : fmtNum(r[s.key], s.kind === "co2" ? 2 : 1)))];
+        return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+      })
+      .join("");
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${fileBase}</title>
+      <style>body{font-family:Inter,Arial,sans-serif;padding:24px;color:#1B2430}h1{font-size:18px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border-bottom:1px solid #E3E8EF;padding:6px 8px;text-align:left}th{background:#F4F6F9}</style>
+      </head><body><h1>Datos históricos — ${ident}</h1><p>${fmtStamp(new Date(query.start).getTime())} — ${fmtStamp(new Date(query.end).getTime())}</p>
+      <table><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr>${body}</table><script>window.print()</script></body></html>`);
+    w.document.close();
   };
+
+  const sideLabel: CSSProperties = { fontSize: 12, fontWeight: 700, color: "#66758A", letterSpacing: "0.04em", textTransform: "uppercase", margin: "14px 0 8px" };
 
   return (
-    <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--text)", fontFamily: "Inter, sans-serif" }}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-
-      {toast && (
-        <div style={{
-          position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)",
-          zIndex: 100, background: "var(--c-green)", color: "#fff", borderRadius: 10,
-          padding: "10px 20px", fontWeight: 600, fontSize: 14,
-          boxShadow: "var(--shadow)", pointerEvents: "none", whiteSpace: "nowrap",
-        }}>
-          {toast}
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#1B2430" }}>{mode === "grafico" ? "Datos históricos" : "Datos en tabla"}</h1>
+          <p style={{ fontSize: 13, color: "#66758A" }}>Visualizando historial — {ident}</p>
         </div>
-      )}
-
-      <div style={{ maxWidth: 1280, margin: "0 auto", padding: mob ? "16px 12px" : "24px 24px" }}>
-        <h1 style={{ fontSize: mob ? 20 : 24, fontWeight: 700, marginBottom: 20, color: "var(--text)" }}>
-          Histórico
-        </h1>
-        {loading && (
-          <p style={{ fontSize: 13, color: "var(--text-2)", marginTop: -12, marginBottom: 16 }}>
-            Cargando serie de {ident}…
-          </p>
-        )}
-
-        <div style={{ ...card, marginBottom: 20 }}>
-          {mob ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", gap: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Desde</div>
-                  <input
-                    type="date"
-                    value={rStart}
-                    onChange={(e) => setRStart(e.target.value)}
-                    style={{ ...inpBase, height: 44, fontSize: 14, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Hasta</div>
-                  <input
-                    type="date"
-                    value={rEnd}
-                    onChange={(e) => setREnd(e.target.value)}
-                    style={{ ...inpBase, height: 44, fontSize: 14, width: "100%", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-              <select
-                value={rFmt}
-                onChange={(e) => setRFmt(e.target.value as "PDF" | "CSV")}
-                style={{ ...inpBase, height: 44, fontSize: 14, width: "100%" }}
-              >
-                <option value="PDF">PDF</option>
-                <option value="CSV">CSV</option>
-              </select>
-              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
-                {chips.map((c) => (
-                  <button key={c} onClick={() => applyChip(c)} style={pillBtn}>{c}</button>
-                ))}
-              </div>
-              <button
-                onClick={doGen}
-                disabled={genning}
-                style={{
-                  background: genning ? "var(--c-gray)" : "var(--accent)",
-                  color: "#fff", border: "none", borderRadius: 10, height: 44,
-                  fontSize: 15, fontWeight: 600, cursor: genning ? "not-allowed" : "pointer",
-                  display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                }}
-              >
-                {genning && (
-                  <span style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-                )}
-                Generar reporte
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Desde</div>
-                <input
-                  type="date"
-                  value={rStart}
-                  onChange={(e) => setRStart(e.target.value)}
-                  style={{ ...inpBase, height: 44, fontSize: 14 }}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Hasta</div>
-                <input
-                  type="date"
-                  value={rEnd}
-                  onChange={(e) => setREnd(e.target.value)}
-                  style={{ ...inpBase, height: 44, fontSize: 14 }}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Formato</div>
-                <select
-                  value={rFmt}
-                  onChange={(e) => setRFmt(e.target.value as "PDF" | "CSV")}
-                  style={{ ...inpBase, height: 44, fontSize: 14 }}
-                >
-                  <option value="PDF">PDF</option>
-                  <option value="CSV">CSV</option>
-                </select>
-              </div>
-              <button
-                onClick={doGen}
-                disabled={genning}
-                style={{
-                  background: genning ? "var(--c-gray)" : "var(--accent)",
-                  color: "#fff", border: "none", borderRadius: 10, height: 44,
-                  fontSize: 14, fontWeight: 600, cursor: genning ? "not-allowed" : "pointer",
-                  minWidth: 160, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                }}
-              >
-                {genning && (
-                  <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", display: "inline-block", animation: "spin 0.7s linear infinite" }} />
-                )}
-                Generar reporte
-              </button>
-              <div style={{ flex: 1 }} />
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {chips.map((c) => (
-                  <button key={c} onClick={() => applyChip(c)} style={pillBtn}>{c}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-2)" }}>
-            Último reporte generado: 30/08/2026, 18:24 · PDF ·{" "}
-            <a
-              href="#"
-              onClick={(e) => e.preventDefault()}
-              style={{ color: "var(--accent)", textDecoration: "none" }}
-            >
-              Descargar de nuevo
-            </a>
-          </div>
-          <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-2)" }}>
-            El reporte incluirá el resumen de alarmas del período.
-          </div>
-        </div>
-
-        <div style={{ ...card, marginBottom: 20 }}>
-          <div style={{ display: "flex", flexDirection: mob ? "column" : "row", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: mob ? "flex-start" : "center" }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 3 }}>Inicio</div>
-                <input
-                  type="datetime-local"
-                  value={csStart}
-                  onChange={(e) => onCsS(e.target.value)}
-                  style={{ ...inpBase, height: 40, fontSize: 12, minWidth: 160, padding: "0 8px" }}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 3 }}>Fin</div>
-                <input
-                  type="datetime-local"
-                  value={csEnd}
-                  onChange={(e) => onCsE(e.target.value)}
-                  style={{ ...inpBase, height: 40, fontSize: 12, minWidth: 160, padding: "0 8px" }}
-                />
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 6, overflowX: "auto", flexWrap: mob ? "nowrap" : "wrap", paddingBottom: mob ? 4 : 0 }}>
-              {SERIES.map((s) => {
-                const active = acts.has(s.key);
-                return (
-                  <button
-                    key={s.key}
-                    onClick={() => toggle(s.key)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 5,
-                      background: active ? "var(--surface)" : "var(--bg)",
-                      border: `1px solid ${active ? s.color : "var(--sep)"}`,
-                      borderRadius: 20, padding: "5px 11px", fontSize: 12,
-                      color: active ? "var(--text)" : "var(--text-2)",
-                      cursor: "pointer", minHeight: 36, whiteSpace: "nowrap",
-                      opacity: active ? 1 : 0.55,
-                    }}
-                  >
-                    {active && (
-                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: s.color, flexShrink: 0, display: "inline-block" }} />
-                    )}
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <SVGChart
-            data={data}
-            activeSeries={acts}
-            xMin={xMin}
-            xMax={xMax}
-            onZoom={onZoom}
-            isZoomed={zoomed}
-            onResetZoom={resetZoom}
-            isMobile={mob}
-          />
-        </div>
-
-        <div style={card}>
-          <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "var(--text-2)", whiteSpace: "nowrap" }}>Intervalo:</span>
-              <select
-                value={tInt}
-                onChange={(e) => setTInt(e.target.value)}
-                style={{ ...inpBase, height: 44, fontSize: 13, minWidth: 80, padding: "0 8px" }}
-              >
-                <option value="1">1 min</option>
-                <option value="5">5 min</option>
-                <option value="15">15 min</option>
-                <option value="60">1 h</option>
-              </select>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
-              <span style={{ color: "var(--text-2)" }}>Total:</span>
-              <span style={{ fontWeight: 500 }}>{tData.length}</span>
-            </div>
-            <input
-              type="text"
-              placeholder="Buscar..."
-              value={tSrch}
-              onChange={(e) => setTSrch(e.target.value)}
-              style={{ ...inpBase, height: 44, fontSize: 13, flex: 1, minWidth: 120 }}
-            />
+        <div style={{ display: "flex", background: "#fff", border: "1px solid #E3E8EF", borderRadius: 10, padding: 3 }}>
+          {(["grafico", "tabla"] as const).map((id) => (
             <button
-              onClick={() => {
-                const hdr = "Hora,Suministro,Retorno,Setpoint,Z1,Z2,Z3,Z4,Humedad,CO2,Ventilacion\n";
-                const rows = tData
-                  .map((d) =>
-                    `${fmtPointTime(d)},${d.supply.toFixed(1)},${d.return_.toFixed(1)},${d.setpoint.toFixed(1)},${d.z1.toFixed(1)},${d.z2.toFixed(1)},${d.z3.toFixed(1)},${d.z4.toFixed(1)},${d.humidity.toFixed(1)},${d.co2.toFixed(1)},${d.ventilation.toFixed(1)}`
-                  )
-                  .join("\n");
-                const blob = new Blob([hdr + rows], { type: "text/csv" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = "historico.csv";
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
+              key={id}
+              type="button"
+              onClick={() => setMode(id)}
               style={{
-                background: "none", border: "1px solid var(--sep)", borderRadius: 8,
-                padding: "0 14px", height: 44, fontSize: 13, color: "var(--text)",
-                cursor: "pointer", whiteSpace: "nowrap",
+                height: 32,
+                padding: "0 14px",
+                borderRadius: 8,
+                fontWeight: 600,
+                fontSize: 13,
+                background: mode === id ? "#2F6BFF" : "transparent",
+                color: mode === id ? "#fff" : "#66758A",
               }}
             >
-              Exportar CSV
+              {id === "grafico" ? "Gráfico" : "Tabla"}
             </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr] gap-4 items-start">
+        <aside style={{ ...card, padding: 16 }}>
+          <div style={sideLabel}>Periodo de búsqueda</div>
+          <label style={{ fontSize: 12, color: "#66758A" }}>Inicio</label>
+          <input style={{ ...field, margin: "4px 0 8px" }} type="datetime-local" value={startIn} onChange={(e) => setStartIn(e.target.value)} />
+          <label style={{ fontSize: 12, color: "#66758A" }}>Fin</label>
+          <input style={{ ...field, marginTop: 4 }} type="datetime-local" value={endIn} onChange={(e) => setEndIn(e.target.value)} />
+
+          <div style={sideLabel}>Temperatura</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["C", "F"] as const).map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setUnit(u)}
+                style={{ ...btn, background: unit === u ? "#2F6BFF" : "#fff", color: unit === u ? "#fff" : "#1B2430", borderColor: unit === u ? "#2F6BFF" : "#D5DEE8" }}
+              >
+                °{u}
+              </button>
+            ))}
           </div>
 
-          {tData.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "48px 0" }}>
-              <div style={{ fontSize: 15, color: "var(--text-2)", marginBottom: 12 }}>No hay datos en este rango</div>
-              <button
-                onClick={resetZoom}
-                style={{ background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, padding: "0 18px", height: 44, fontSize: 13, cursor: "pointer" }}
-              >
-                Ampliar rango
-              </button>
-            </div>
+          <button
+            type="button"
+            style={{ ...btn, marginTop: 14, background: "#2F6BFF", color: "#fff", borderColor: "#2F6BFF" }}
+            onClick={() => setQuery({ start: startIn, end: endIn })}
+          >
+            {mode === "grafico" ? "Generar gráfico" : "Generar tabla"}
+          </button>
+
+          {mode === "grafico" ? (
+            <>
+              <div style={sideLabel}>Vistas del gráfico</div>
+              <div className="flex flex-col gap-2">
+                {CHART_VIEWS.map((v) => (
+                  <button key={v.id} type="button" onClick={() => applyView(v.id)} style={{ ...btn, background: view === v.id ? "#2F6BFF" : "#fff", color: view === v.id ? "#fff" : "#1B2430", borderColor: view === v.id ? "#2F6BFF" : "#D5DEE8" }}>
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+              <div style={sideLabel}>Variables y color</div>
+              <input style={field} placeholder="Buscar variable" value={findVar} onChange={(e) => setFindVar(e.target.value)} />
+              <div className="flex flex-col gap-1 mt-2">
+                {filteredSeries.map((s) => (
+                  <div key={s.key} className="flex items-center justify-between gap-2" style={{ minHeight: 28 }}>
+                    <label className="flex items-center gap-2" style={{ fontSize: 13, color: "#1B2430" }}>
+                      <input type="checkbox" checked={active.has(s.key)} onChange={() => { toggle(active, s.key, setActive); setView("custom"); }} style={{ accentColor: s.color }} />
+                      <span style={{ width: 10, height: 10, borderRadius: 99, background: s.color, display: "inline-block" }} />
+                      {s.label}
+                    </label>
+                    <label style={{ fontSize: 11, color: "#66758A" }} className="flex items-center gap-1">
+                      <input type="checkbox" checked={showValues.has(s.key)} onChange={() => toggle(showValues, s.key, setShowValues)} />
+                      Valores
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </>
           ) : (
             <>
-              <div style={{ overflowX: "auto" }}>
+              <div style={sideLabel}>Vistas predefinidas</div>
+              <div className="flex flex-col gap-2">
+                {TABLE_VIEWS.map((v) => (
+                  <button key={v.id} type="button" onClick={() => applyTableView(v.id)} style={{ ...btn, background: tableView === v.id ? "#2F6BFF" : "#fff", color: tableView === v.id ? "#fff" : "#1B2430", borderColor: tableView === v.id ? "#2F6BFF" : "#D5DEE8" }}>
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+              <div style={sideLabel}>Columnas a mostrar</div>
+              {SERIES.map((s) => (
+                <label key={s.key} className="flex items-center gap-2" style={{ fontSize: 13, minHeight: 26 }}>
+                  <input type="checkbox" checked={cols.has(s.key)} onChange={() => { toggle(cols, s.key, setCols); setTableView("custom"); }} style={{ accentColor: s.color }} />
+                  {s.label}
+                </label>
+              ))}
+            </>
+          )}
+        </aside>
+
+        <section style={{ ...card, padding: 16, minHeight: 480 }}>
+          {mode === "grafico" ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <span style={{ fontSize: 13, color: "#66758A" }}>
+                  {loading ? "Cargando lecturas…" : `${rows.length} lecturas`}
+                  {err ? ` · ${err}` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setZoom(null)}
+                  style={{ height: 32, padding: "0 12px", borderRadius: 8, border: "1px solid #D5DEE8", background: "#fff", fontSize: 13, fontWeight: 600 }}
+                >
+                  Restablecer zoom
+                </button>
+              </div>
+              {!loading && !rows.length ? (
+                <p style={{ color: "#66758A", padding: 24 }}>No hay lecturas en este periodo.</p>
+              ) : (
+                <Chart rows={rows} active={shown} showValues={showValues} unit={unit} xMin={xMin} xMax={xMax} onZoom={(a, b) => setZoom({ a, b })} />
+              )}
+              <div className="flex flex-wrap justify-center gap-4 mt-2">
+                {shown.map((s) => (
+                  <span key={s.key} style={{ fontSize: 12, color: s.color, fontWeight: 600 }}>
+                    {s.dashed ? "— " : "━ "}
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+              <p style={{ fontSize: 12, color: "#8A97A8", textAlign: "center", marginTop: 6 }}>Arrastra sobre el gráfico para acercar un tramo.</p>
+            </>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <button type="button" onClick={downloadPdf} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar PDF</button>
+                <button type="button" onClick={downloadCsv} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar CSV</button>
+                <button type="button" onClick={downloadExcel} style={{ ...btn, width: "auto", padding: "0 12px" }}>Descargar Excel</button>
+                <input style={{ ...field, width: 180, marginLeft: "auto" }} placeholder="Buscar por fecha" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} />
+              </div>
+              <div style={{ overflow: "auto", maxHeight: 560 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                   <thead>
                     <tr>
-                      {["Fecha y hora", "Suministro", "Retorno", "Setpoint", "Z1", "Z2", "Z3", "Z4", "Humedad", "CO₂", "Ventil."].map((h, i) => (
-                        <th
-                          key={h}
-                          style={{
-                            position: "sticky",
-                            top: 0,
-                            ...(i === 0 && mob ? { left: 0 } : {}),
-                            background: "var(--surface)",
-                            zIndex: i === 0 && mob ? 3 : 2,
-                            padding: "8px 10px",
-                            textAlign: i === 0 ? "left" : "right",
-                            fontWeight: 600,
-                            fontSize: 12,
-                            color: "var(--text-2)",
-                            borderBottom: "1px solid var(--sep)",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
+                      {["Fecha / Hora", ...tableSeries.map((s) => s.label)].map((h) => (
+                        <th key={h} style={{ position: "sticky", top: 0, background: "#F4F6F9", textAlign: "left", padding: "8px 10px", color: "#66758A", fontWeight: 600, borderBottom: "1px solid #E3E8EF" }}>
                           {h}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {pgDat.map((d) => {
-                      const cells: { k: string; val: string }[] = [
-                        { k: "ts", val: fmtPointTime(d) },
-                        { k: "supply", val: d.supply.toFixed(1) + "°C" },
-                        { k: "return_", val: d.return_.toFixed(1) + "°C" },
-                        { k: "setpoint", val: d.setpoint.toFixed(1) + "°C" },
-                        { k: "z1", val: d.z1.toFixed(1) + "°C" },
-                        { k: "z2", val: d.z2.toFixed(1) + "°C" },
-                        { k: "z3", val: d.z3.toFixed(1) + "°C" },
-                        { k: "z4", val: d.z4.toFixed(1) + "°C" },
-                        { k: "humidity", val: d.humidity.toFixed(1) + "%" },
-                        { k: "co2", val: d.co2.toFixed(1) + "%" },
-                        { k: "ventilation", val: d.ventilation.toFixed(1) + "%" },
-                      ];
-                      return (
-                        <tr
-                          key={d.ts}
-                          onClick={() => mob && setSelRow(d)}
-                          style={{ cursor: mob ? "pointer" : "default" }}
-                        >
-                          {cells.map((c, ci) => (
-                            <td
-                              key={c.k}
-                              style={{
-                                padding: "7px 10px",
-                                textAlign: ci === 0 ? "left" : "right",
-                                borderBottom: "1px solid var(--sep)",
-                                fontVariantNumeric: "tabular-nums",
-                                color: ci === 0 ? "var(--text)" : (cc(d, c.k) ?? "var(--text)"),
-                                fontWeight: cc(d, c.k) ? 600 : 400,
-                                whiteSpace: "nowrap",
-                                ...(ci === 0 && mob
-                                  ? ({ position: "sticky", left: 0, background: "var(--surface)", zIndex: 1 } as React.CSSProperties)
-                                  : {}),
-                              }}
-                            >
-                              {c.val}
+                    {pageRows.map((r, i) => (
+                      <tr key={r.ts + "-" + i} style={{ background: i % 2 ? "#F8FAFC" : "#fff" }}>
+                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #EEF2F6", whiteSpace: "nowrap" }}>{fmtStamp(r.ts)}</td>
+                        {tableSeries.map((s) => {
+                          const raw = r[s.key];
+                          const text = s.kind === "temp" && raw != null ? dispTemp(raw, unit).toFixed(1) : fmtNum(raw, s.kind === "co2" ? 2 : 0);
+                          const hot = s.kind === "temp" && raw != null && r.setpoint != null && s.key !== "setpoint" && Math.abs(raw - r.setpoint) > 1.5;
+                          return (
+                            <td key={s.key} style={{ padding: "7px 10px", borderBottom: "1px solid #EEF2F6", color: hot ? "#E24B4B" : "#1B2430", fontWeight: hot ? 700 : 500 }}>
+                              {text}
                             </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
+                          );
+                        })}
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
+                {!pageRows.length && <p style={{ color: "#66758A", padding: 16 }}>{loading ? "Cargando…" : "No hay filas en este periodo."}</p>}
               </div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
-                <button
-                  onClick={() => setTPage((p) => Math.max(0, p - 1))}
-                  disabled={tPage === 0}
-                  style={{
-                    background: "var(--nav-pill)", border: "none", borderRadius: 8,
-                    padding: "0 16px", height: 44, fontSize: 13,
-                    cursor: tPage === 0 ? "not-allowed" : "pointer",
-                    color: "var(--text)", opacity: tPage === 0 ? 0.4 : 1,
-                  }}
-                >
-                  ← Anterior
-                </button>
-                <span style={{ fontSize: 12, color: "var(--text-2)" }}>
-                  {tPage + 1} / {Math.max(1, totPg)}
-                </span>
-                <button
-                  onClick={() => setTPage((p) => Math.min(totPg - 1, p + 1))}
-                  disabled={tPage >= totPg - 1}
-                  style={{
-                    background: "var(--nav-pill)", border: "none", borderRadius: 8,
-                    padding: "0 16px", height: 44, fontSize: 13,
-                    cursor: tPage >= totPg - 1 ? "not-allowed" : "pointer",
-                    color: "var(--text)", opacity: tPage >= totPg - 1 ? 0.4 : 1,
-                  }}
-                >
-                  Siguiente →
-                </button>
+              <div className="flex items-center justify-between mt-3" style={{ fontSize: 13, color: "#66758A" }}>
+                <span>{tableRows.length} filas</span>
+                <div className="flex gap-2">
+                  <button type="button" style={{ ...btn, width: "auto", padding: "0 10px" }} disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Anterior</button>
+                  <span style={{ lineHeight: "38px" }}>{page + 1} / {pages}</span>
+                  <button type="button" style={{ ...btn, width: "auto", padding: "0 10px" }} disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}>Siguiente</button>
+                </div>
               </div>
             </>
           )}
-        </div>
+        </section>
       </div>
-
-      {selRow && (
-        <div
-          onClick={() => setSelRow(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 40, display: "flex", alignItems: "flex-end" }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "var(--surface)", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxHeight: "80vh", overflowY: "auto", boxSizing: "border-box" }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <span style={{ fontWeight: 700, fontSize: 16 }}>{fmtPointTime(selRow)}</span>
-              <button
-                onClick={() => setSelRow(null)}
-                style={{ background: "none", border: "none", fontSize: 22, color: "var(--text-2)", cursor: "pointer", minHeight: 44, minWidth: 44, display: "flex", alignItems: "center", justifyContent: "center" }}
-              >
-                ×
-              </button>
-            </div>
-            {([
-              ["Suministro", selRow.supply.toFixed(1) + "°C"],
-              ["Retorno", selRow.return_.toFixed(1) + "°C"],
-              ["Setpoint", selRow.setpoint.toFixed(1) + "°C"],
-              ["Zona 1", selRow.z1.toFixed(1) + "°C"],
-              ["Zona 2", selRow.z2.toFixed(1) + "°C"],
-              ["Zona 3", selRow.z3.toFixed(1) + "°C"],
-              ["Zona 4", selRow.z4.toFixed(1) + "°C"],
-              ["Humedad", selRow.humidity.toFixed(1) + "%"],
-              ["CO₂", selRow.co2.toFixed(1) + "%"],
-              ["Ventilación", selRow.ventilation.toFixed(1) + "%"],
-            ] as [string, string][]).map(([label, value]) => (
-              <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--sep)" }}>
-                <span style={{ color: "var(--text-2)", fontSize: 14 }}>{label}</span>
-                <span style={{ fontWeight: 500, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

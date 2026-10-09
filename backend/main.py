@@ -327,6 +327,8 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.client_users.create_index("username", unique=True)
+    await _ensure_client_users()
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
@@ -1760,19 +1762,137 @@ async def _unit_context(ident: str) -> tuple[dict[str, Any], bool, dict[str, Any
     return latest, online, sess
 
 
+DEFAULT_ZONE_RANGES = [
+    {"id": 1, "min": 26.0, "max": 32.0},
+    {"id": 2, "min": 26.0, "max": 32.0},
+    {"id": 3, "min": 26.0, "max": 32.0},
+    {"id": 4, "min": 26.0, "max": 32.0},
+]
+
+
+async def _ensure_client_users() -> None:
+    if await db.client_users.count_documents({}) > 0:
+        return
+    await db.client_users.insert_many(
+        [
+            {"username": key, "password": val["password"], "role": val["role"], "name": val["name"]}
+            for key, val in CLIENT_USERS.items()
+        ]
+    )
+
+
+def _public_user(doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "username": doc.get("username"),
+        "name": doc.get("name") or doc.get("username"),
+        "role": doc.get("role") or "monitor",
+    }
+
+
+class ClientUserBody(BaseModel):
+    username: str
+    password: str
+    role: str = "monitor"
+    name: str = ""
+
+
+class ClientPasswordBody(BaseModel):
+    username: str
+    password: str
+    next_password: str
+
+
+class ZoneRangeBody(BaseModel):
+    ident: str = "POLLO_BEBE"
+    zones: list[dict[str, Any]] = Field(default_factory=list)
+
+
 @app.post("/api/client/login")
 async def client_login(body: ClientLoginBody):
     key = (body.username or "").strip().lower()
-    user = CLIENT_USERS.get(key)
-    if not user or user["password"] != (body.password or ""):
+    doc = await db.client_users.find_one({"username": key})
+    user = doc or CLIENT_USERS.get(key)
+    if not user or user.get("password") != (body.password or ""):
         raise HTTPException(401, "Usuario o contraseña incorrectos")
     return {
         "ok": True,
-        "role": user["role"],
-        "name": user["name"],
+        "role": user.get("role"),
+        "name": user.get("name") or key,
         "username": key,
         "ident": capi.IDENT_DEFAULT,
     }
+
+
+@app.get("/api/client/users")
+async def client_users_list():
+    rows = await db.client_users.find({}, {"_id": 0, "password": 0}).sort("username", 1).to_list(200)
+    return {"users": rows}
+
+
+@app.post("/api/client/users")
+async def client_users_create(body: ClientUserBody):
+    key = body.username.strip().lower()
+    if not key or not body.password.strip():
+        raise HTTPException(400, "Usuario y contraseña son obligatorios")
+    role = body.role if body.role in {"admin", "monitor", "superadmin"} else "monitor"
+    doc = {
+        "username": key,
+        "password": body.password,
+        "role": role,
+        "name": (body.name or key).strip(),
+    }
+    try:
+        await db.client_users.insert_one(doc)
+    except Exception as e:
+        if "E11000" in str(e) or "duplicate" in str(e).lower():
+            raise HTTPException(409, "Ese usuario ya existe") from e
+        raise
+    return {"ok": True, "user": _public_user(doc)}
+
+
+@app.post("/api/client/password")
+async def client_password(body: ClientPasswordBody):
+    key = body.username.strip().lower()
+    doc = await db.client_users.find_one({"username": key})
+    if not doc or doc.get("password") != body.password:
+        raise HTTPException(401, "La contraseña actual no coincide")
+    if len(body.next_password.strip()) < 4:
+        raise HTTPException(400, "La nueva contraseña debe tener al menos 4 caracteres")
+    await db.client_users.update_one(
+        {"username": key},
+        {"$set": {"password": body.next_password.strip()}},
+    )
+    return {"ok": True}
+
+
+@app.get("/api/client/ranges")
+async def client_ranges(ident: str = "POLLO_BEBE"):
+    doc = await db.zone_ranges.find_one({"ident": ident}, {"_id": 0})
+    zones = (doc or {}).get("zones") or DEFAULT_ZONE_RANGES
+    return {"ident": ident, "zones": zones}
+
+
+@app.put("/api/client/ranges")
+async def client_ranges_save(body: ZoneRangeBody):
+    zones = []
+    for raw in body.zones:
+        try:
+            zid = int(raw.get("id"))
+            zmin = float(raw.get("min"))
+            zmax = float(raw.get("max"))
+        except (TypeError, ValueError):
+            continue
+        if zid < 1 or zid > 4 or zmin >= zmax:
+            continue
+        zones.append({"id": zid, "min": zmin, "max": zmax})
+    if len(zones) != 4:
+        raise HTTPException(400, "Hacen falta las 4 zonas, con mínimo menor que máximo")
+    await db.zone_ranges.update_one(
+        {"ident": body.ident},
+        {"$set": {"ident": body.ident, "zones": zones, "updated_at": _now()}},
+        upsert=True,
+    )
+    return {"ok": True, "ident": body.ident, "zones": zones}
 
 
 @app.get("/api/client/live")

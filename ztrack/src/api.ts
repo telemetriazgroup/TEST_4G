@@ -77,6 +77,73 @@ export async function fetchLive(ident = "POLLO_BEBE"): Promise<LiveSnapshot> {
   return r.json();
 }
 
+export type ClientUser = { username: string; name: string; role: Role | "superadmin" };
+export type ZoneRange = { id: number; min: number; max: number };
+
+export async function fetchUsers(): Promise<ClientUser[]> {
+  const r = await fetch(`${API}/api/client/users`);
+  if (!r.ok) throw new Error("No se pudieron leer los usuarios");
+  const data = await r.json();
+  return data.users || [];
+}
+
+export async function createUser(body: { username: string; password: string; role: string; name: string }) {
+  const r = await fetch(`${API}/api/client/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo crear el usuario");
+  return data;
+}
+
+export async function changePassword(username: string, password: string, nextPassword: string) {
+  const r = await fetch(`${API}/api/client/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, next_password: nextPassword }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo cambiar la contraseña");
+  return data;
+}
+
+export async function fetchRanges(ident = "POLLO_BEBE"): Promise<ZoneRange[]> {
+  const r = await fetch(`${API}/api/client/ranges?ident=${encodeURIComponent(ident)}`);
+  if (!r.ok) throw new Error("No se pudieron leer los rangos");
+  const data = await r.json();
+  return data.zones || [];
+}
+
+export async function saveRanges(ident: string, zones: ZoneRange[]) {
+  const r = await fetch(`${API}/api/client/ranges`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ident, zones }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudieron guardar los rangos");
+  return data;
+}
+
+export async function fetchCommandCatalog(ident = "POLLO_BEBE") {
+  const r = await fetch(`${API}/api/comandos/catalog?ident=${encodeURIComponent(ident)}`);
+  if (!r.ok) throw new Error("No se pudo leer el catálogo de comandos");
+  return r.json();
+}
+
+export async function enqueueCommand(body: Record<string, unknown>) {
+  const r = await fetch(`${API}/api/comandos/enqueue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo encolar el comando");
+  return data;
+}
+
 export async function fetchSeries(
   hours: number,
   ident = "POLLO_BEBE",

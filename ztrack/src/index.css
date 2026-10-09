@@ -13,41 +13,37 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ── Design tokens (light) ────────────────────────────────────────────────── */
+/* ── Paleta Ztrack (panel claro, barra azul marino) ─────────────────────── */
 :root {
-  --bg:            #F5F5F7;
+  --bg:            #F4F6F9;
   --surface:       #FFFFFF;
   --input-surface: #FFFFFF;
-  --text:          #1D1D1F;
-  --text-2:        #6E6E73;
-  --sep:           #D2D2D7;
-  --accent:        #0071E3;
-  --c-green:       #34C759;
-  --c-amber:       #FF9F0A;
-  --c-red:         #FF3B30;
-  --c-gray:        #8E8E93;
-  --surface-blur:  rgba(245, 245, 247, 0.85);
-  --nav-pill:      #E5E5EA;
-  --shadow:        0 1px 3px rgba(0, 0, 0, 0.06);
-  --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.08);
-  --gauge-track:   #E8E8ED;
-}
-
-/* ── Dark mode (media query) ─────────────────────────────────────────────── */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg:            #000000;
-    --surface:       #1C1C1E;
-    --input-surface: #2C2C2E;
-    --text:          #F5F5F7;
-    --text-2:        #98989D;
-    --sep:           #38383A;
-    --surface-blur:  rgba(28, 28, 30, 0.88);
-    --nav-pill:      #2C2C2E;
-    --shadow:        0 1px 3px rgba(0, 0, 0, 0.32);
-    --card-shadow:   0 2px 20px rgba(0, 0, 0, 0.55);
-    --gauge-track:   #3A3A3C;
-  }
+  --text:          #1B2430;
+  --text-2:        #66758A;
+  --sep:           #E3E8EF;
+  --accent:        #2F6BFF;
+  --c-green:       #1F9D55;
+  --c-amber:       #E09A2B;
+  --c-red:         #E24B4B;
+  --c-gray:        #8A97A8;
+  --surface-blur:  rgba(255, 255, 255, 0.92);
+  --nav-pill:      #E8EEF8;
+  --shadow:        0 1px 2px rgba(18, 38, 63, 0.06);
+  --card-shadow:   0 8px 24px rgba(18, 38, 63, 0.06);
+  --gauge-track:   #E6ECF3;
+  --sidebar:       #12263A;
+  --sidebar-text:  #C5D0DE;
+  --sidebar-muted: #8EA0B5;
+  --p-supply:      #2F6BFF;
+  --p-return:      #0E9A8A;
+  --p-set:         #E07A2F;
+  --p-z1:          #2F6BFF;
+  --p-z2:          #0E9A8A;
+  --p-z3:          #E07A2F;
+  --p-z4:          #7B5EA7;
+  --p-co2:         #E24B4B;
+  --p-hum:         #2BB3C7;
+  --p-vent:        #3AA76D;
 }
 
 /* ── Dark mode (forced) ──────────────────────────────────────────────────── */
