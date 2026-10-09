@@ -16,10 +16,15 @@ export default function Alertas({ live, stale }: { live: LiveSnapshot | null; st
   for (const z of live?.zones || []) {
     const band = ranges.find((r) => r.id === z.id)
     if (z.temp == null || !band) continue
-    if (z.temp < band.min || z.temp > band.max) {
+    if (z.temp < band.min - 1.5 || z.temp > band.max + 1.5) {
       notices.push({
         level: 'crit',
-        text: `Zona ${z.id} en ${z.temp.toFixed(1)} °C, fuera de ${band.min.toFixed(1)}–${band.max.toFixed(1)} °C`,
+        text: `Zona ${z.id} en ${z.temp.toFixed(1)} °C, fuera de ${band.min.toFixed(1)}–${band.max.toFixed(1)} °C ± 1.5`,
+      })
+    } else if (z.temp < band.min || z.temp > band.max) {
+      notices.push({
+        level: 'warn',
+        text: `Zona ${z.id} en ${z.temp.toFixed(1)} °C, a menos de 1.5 °C del rango ${band.min.toFixed(1)}–${band.max.toFixed(1)}`,
       })
     }
   }

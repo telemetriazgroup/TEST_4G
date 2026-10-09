@@ -89,6 +89,18 @@ def test_zero_supply_return_humidity_dropped():
     assert point["setpoint_c"] is None
     assert point["co2_pct"] is None
     assert point["usda1_c"] is None
+    zones = build_series(
+        [{
+            "kind": "info",
+            "ts": "t3",
+            "snapshot": {"supply_air_c": 28, "return_air_c": 28, "humidity_pct": 60, "usda1_c": 0, "usda2_c": 4.9, "usda3_c": 5, "usda4_c": 28.2},
+        }],
+        1,
+    )["points"][0]
+    assert zones["usda1_c"] is None
+    assert zones["usda2_c"] is None
+    assert zones["usda3_c"] == 5
+    assert zones["usda4_c"] == 28.2
 
 
 if __name__ == "__main__":

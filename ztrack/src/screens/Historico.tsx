@@ -53,6 +53,11 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+function zoneNum(v: unknown): number | null {
+  const n = num(v);
+  return n == null || n < 5 ? null : n;
+}
+
 function toRows(points: SeriesPoint[]): Row[] {
   return points
     .map((p) => {
@@ -67,10 +72,10 @@ function toRows(points: SeriesPoint[]): Row[] {
         return_,
         humidity,
         setpoint: bad ? null : num(p.setpoint_c),
-        z1: bad ? null : num(p.usda1_c),
-        z2: bad ? null : num(p.usda2_c),
-        z3: bad ? null : num(p.usda3_c),
-        z4: bad ? null : num(p.usda4_c),
+        z1: bad ? null : zoneNum(p.usda1_c),
+        z2: bad ? null : zoneNum(p.usda2_c),
+        z3: bad ? null : zoneNum(p.usda3_c),
+        z4: bad ? null : zoneNum(p.usda4_c),
         co2: bad ? null : num(p.co2_pct),
       };
     })

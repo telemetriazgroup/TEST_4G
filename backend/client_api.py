@@ -65,6 +65,17 @@ def _positive(*values: Any) -> float | None:
     return None
 
 
+ZONE_FLOOR_C = 5.0
+
+
+def _zone_c(value: Any) -> float | None:
+    """Una zona por debajo de 5 °C no es lectura válida."""
+    n = _num(value)
+    if n is None or n < ZONE_FLOOR_C:
+        return None
+    return n
+
+
 def _is_zero(value: Any) -> bool:
     n = _num(value)
     return n == 0
@@ -110,7 +121,7 @@ def build_live(
 
     zones = []
     for i in range(1, 5):
-        zones.append({"id": i, "temp": _pick(info.get(f"usda{i}_c"))})
+        zones.append({"id": i, "temp": _zone_c(info.get(f"usda{i}_c"))})
 
     motors = []
     for a in relay.get("analogs") or []:
@@ -197,10 +208,10 @@ def build_series(rows: list[dict[str, Any]], hours: int = 6) -> dict[str, Any]:
                 "setpoint_c": _pick(snap.get("setpoint_c")),
                 "humidity_pct": _positive(snap.get("humidity_pct")),
                 "co2_pct": _pick(snap.get("co2_pct")),
-                "usda1_c": _pick(snap.get("usda1_c")),
-                "usda2_c": _pick(snap.get("usda2_c")),
-                "usda3_c": _pick(snap.get("usda3_c")),
-                "usda4_c": _pick(snap.get("usda4_c")),
+                "usda1_c": _zone_c(snap.get("usda1_c")),
+                "usda2_c": _zone_c(snap.get("usda2_c")),
+                "usda3_c": _zone_c(snap.get("usda3_c")),
+                "usda4_c": _zone_c(snap.get("usda4_c")),
             }
         )
     points.sort(key=lambda p: str(p.get("ts") or ""))

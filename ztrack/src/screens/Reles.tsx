@@ -25,7 +25,7 @@ export default function Reles({ live }: { live: LiveSnapshot | null }) {
         bits,
         label: `Relé ${id}`,
       });
-      setNote(res.status === "queued" ? `Relé ${id} encolado` : `Relé ${id} quedó en referencia: el equipo no tiene sesión`);
+      setNote(`Relé ${id} encolado en la sesión del serial. Si no sale en 10 min se cancela.`);
     } catch (e) {
       setNote(e instanceof Error ? e.message : "No se pudo enviar el relé");
     } finally {

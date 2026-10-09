@@ -8,9 +8,14 @@ type Status = 'green' | 'amber' | 'red'
 type ZoneVal = { id: number; temp: number | null }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function zoneStatus(temp: number, setpoint: number): Status {
-  const d = Math.abs(temp - setpoint)
-  return d >= 1.5 ? 'red' : d >= 0.8 ? 'amber' : 'green'
+const ZONE_MIN = 27
+const ZONE_MAX = 29
+const ZONE_MARGIN = 1.5
+
+function zoneStatus(temp: number): Status {
+  if (temp >= ZONE_MIN && temp <= ZONE_MAX) return 'green'
+  if (temp >= ZONE_MIN - ZONE_MARGIN && temp <= ZONE_MAX + ZONE_MARGIN) return 'amber'
+  return 'red'
 }
 
 function co2Status(pct: number, setpoint: number | null): Status {
@@ -139,7 +144,7 @@ const ZONE_TONE = ['#2F6BFF', '#0E9A8A', '#E07A2F', '#7B5EA7']
 function TruckDiagram({ zones, setpoint }: { zones: ZoneVal[]; setpoint: number }) {
   const cells = [1, 2, 3, 4].map((id) => {
     const temp = zones.find((z) => z.id === id)?.temp ?? null
-    const st: Status = temp == null ? 'green' : zoneStatus(temp, setpoint)
+    const st: Status = temp == null ? 'green' : zoneStatus(temp)
     return { id, temp, st, tone: ZONE_TONE[id - 1] }
   })
 
@@ -493,7 +498,7 @@ function AirCard({
 function ZoneCard({ id, temp, setpoint, trend = 'flat', stale = false, noData = false }: {
   id: number; temp: number; setpoint: number; trend?: 'up' | 'down' | 'flat'; stale?: boolean; noData?: boolean
 }) {
-  const st = zoneStatus(temp, setpoint)
+  const st = zoneStatus(temp)
   const tone = TONE[`z${id}`] || 'var(--accent)'
   const borderStyle = st === 'red' ? '2px solid var(--c-red)' : '1px solid var(--sep)'
 
@@ -513,8 +518,11 @@ function ZoneCard({ id, temp, setpoint, trend = 'flat', stale = false, noData = 
     )
   }
 
-  const diff = temp - setpoint
-  const diffLabel = (diff > 0 ? '+' : '') + fmtTemp(diff) + ' °C del setpoint'
+  const diffLabel = st === 'green'
+    ? 'en rango 27–29 °C'
+    : temp < ZONE_MIN
+      ? `${(ZONE_MIN - temp).toFixed(1)} °C bajo el rango`
+      : `${(temp - ZONE_MAX).toFixed(1)} °C sobre el rango`
 
   return (
     <div
@@ -760,7 +768,12 @@ export default function Principal({
   }))
 
   const hist = (key: keyof SeriesPoint, dropZero = false) =>
-    points.map((p) => p[key]).filter((v): v is number => typeof v === 'number' && (!dropZero || v !== 0))
+    points.map((p) => p[key]).filter((v): v is number => {
+      if (typeof v !== 'number') return false
+      if (dropZero && v === 0) return false
+      if (String(key).startsWith('usda') && v < 5) return false
+      return true
+    })
 
   const hSupply = useMemo(() => hist('supply_air_c', true), [points])
   const hReturn = useMemo(() => hist('return_air_c', true), [points])
@@ -789,8 +802,8 @@ export default function Principal({
 
   const overallStatus = useMemo(() => {
     const withTemp = zones.filter((z) => z.temp != null) as { id: number; temp: number }[]
-    const redZ = withTemp.filter((z) => zoneStatus(z.temp, setpoint) === 'red')
-    const amberZ = withTemp.filter((z) => zoneStatus(z.temp, setpoint) === 'amber')
+    const redZ = withTemp.filter((z) => zoneStatus(z.temp) === 'red')
+    const amberZ = withTemp.filter((z) => zoneStatus(z.temp) === 'amber')
     const co2 = live?.co2_pct
     if (redZ.length > 0)
       return {

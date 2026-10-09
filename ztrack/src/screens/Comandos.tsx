@@ -48,7 +48,7 @@ export default function Comandos({ live }: { live: LiveSnapshot | null }) {
         value: value === '' ? 1 : Number(value),
         label,
       })
-      setNote(res.status === 'queued' ? `Encolado: ${label}` : `Guardado como referencia (equipo sin sesión): ${label}`)
+      setNote(`Encolado en la sesión del serial: ${label}. Si no sale en 10 min se cancela.`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
     }
@@ -59,7 +59,7 @@ export default function Comandos({ live }: { live: LiveSnapshot | null }) {
       <div className="flex items-center justify-between">
         <h1 className="font-semibold" style={{ fontSize: 22 }}>Comandos del equipo</h1>
         <span style={{ fontSize: 13, color: online ? 'var(--c-green)' : 'var(--c-amber)', fontWeight: 600 }}>
-          {online ? 'Sesión abierta' : 'Sin sesión — queda en referencia'}
+          {online ? 'Sesión del serial' : 'Sin sesión activa — no se puede controlar'}
         </span>
       </div>
       <p style={{ fontSize: 13, color: 'var(--text-2)' }}>
@@ -86,6 +86,7 @@ export default function Comandos({ live }: { live: LiveSnapshot | null }) {
               />
               <button
                 type="button"
+                disabled={!online}
                 onClick={() => send(f.idx, values[f.idx] ?? '', f.label)}
                 style={{ height: 38, borderRadius: 10, background: 'var(--accent)', color: '#fff', fontWeight: 600, padding: '0 14px' }}
               >
@@ -102,6 +103,7 @@ export default function Comandos({ live }: { live: LiveSnapshot | null }) {
           <button
             key={a.idx}
             type="button"
+            disabled={!online}
             onClick={() => {
               if (a.confirm && !window.confirm(`Enviar “${a.label}”?`)) return
               const extra = a.unit ? window.prompt(`${a.label} (${a.unit})`, '300') : '1'

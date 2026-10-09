@@ -13,7 +13,7 @@ from typing import Any
 from homologate import split_json_objects
 
 TX_BUDGET_S = 3.5
-COMMAND_TTL_S = 2 * 3600
+COMMAND_TTL_S = 10 * 60
 IDENT_DEFAULT = "POLLO_BEBE"
 
 RELAY_DATA_RE = re.compile(r"^RELAY(\d+)_DATA:", re.IGNORECASE)

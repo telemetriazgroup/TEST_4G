@@ -885,6 +885,33 @@ async def _session_online(
     return None
 
 
+async def _default_control_session(ident: str = "POLLO_BEBE") -> dict[str, Any] | None:
+    """Sesión activa del serial de la que salen los datos que se muestran."""
+    latest = await _latest_by_kind(ident, None)
+    ip = None
+    addr = None
+    for kind in ("info", "relay", "mp5000"):
+        row = latest.get(kind) or {}
+        ip = ip or row.get("ip")
+        addr = addr or row.get("addr")
+    sess = await _session_online(addr=addr, ip=ip, session_id=None)
+    if sess:
+        return sess
+    return await db.sessions.find_one({"is_active": True}, sort=[("last_seen", -1)])
+
+
+async def _resolve_control_session(
+    addr: str | None, ip: str | None, session_id: str | None, ident: str = "POLLO_BEBE"
+) -> tuple[bool, dict[str, Any] | None]:
+    online, sess = await _is_online(addr, ip, session_id)
+    if online and sess:
+        return True, sess
+    sess = await _default_control_session(ident)
+    if sess:
+        return True, sess
+    return False, None
+
+
 async def _is_online(addr: str | None, ip: str | None, session_id: str | None) -> tuple[bool, dict[str, Any] | None]:
     sess = await _session_online(addr=addr, ip=ip, session_id=session_id)
     if not sess:
@@ -967,11 +994,11 @@ async def _expire_comandos() -> int:
     for row in rows:
         await db.comandos.update_one(
             {"_id": row["_id"]},
-            {"$set": {"status": "canceled", "reason": "expired_2h", "canceled_at": now}},
+            {"$set": {"status": "canceled", "reason": "expired_10m", "canceled_at": now}},
         )
         n += 1
     if n:
-        log.info("comandos: %s cancelados por TTL 2h", n)
+        log.info("comandos: %s cancelados por TTL 10 min", n)
         await broadcast({"type": "comando", "action": "expired", "count": n})
     return n
 
@@ -1522,7 +1549,7 @@ async def comandos_catalog(ident: str = "POLLO_BEBE", ip: str | None = None):
     latest = await _latest_by_kind(ident, ip)
     names = await _relay_names_for(ident)
     cat = cmdb.catalog(latest, names)
-    online, sess = await _is_online(None, ip, None)
+    online, sess = await _resolve_control_session(None, ip, None, ident)
     return {
         "ident": ident,
         "online": online,
@@ -1561,16 +1588,18 @@ async def comandos_enqueue(body: ComandoBody):
         built = _built_comando(body)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    online, sess = await _is_online(body.addr, body.ip, body.session_id)
+    online, sess = await _resolve_control_session(body.addr, body.ip, body.session_id, body.ident)
+    if not online or not sess:
+        raise HTTPException(409, "No hay sesión activa en el serial. No se puede controlar.")
     now = _now()
     qid = str(uuid.uuid4())
-    status = "queued" if online else "reference"
+    status = "queued"
     doc = {
         "queue_id": qid,
         "ts": now,
         "enqueued_at": now,
         "status": status,
-        "reason": None if online else "offline_or_no_session",
+        "reason": None,
         "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=cmdb.COMMAND_TTL_S)).isoformat(),
         "i": built.get("i"),
         "kind": built.get("kind"),
@@ -1582,9 +1611,9 @@ async def comandos_enqueue(body: ComandoBody):
         "fp": built.get("fp"),
         "scaled": built.get("scaled"),
         "window": body.window or "any",
-        "addr": body.addr,
-        "ip": body.ip,
-        "session_id": body.session_id or (sess or {}).get("session_id"),
+        "addr": (sess or {}).get("addr") or body.addr,
+        "ip": (sess or {}).get("ip") or body.ip,
+        "session_id": (sess or {}).get("session_id") or body.session_id,
         "origin": "reglas" if built.get("kind") == "pantalla_cmd" else "ui",
         "timed": bool(built.get("timed")),
         "built": built,
@@ -1818,10 +1847,10 @@ async def _unit_context(ident: str) -> tuple[dict[str, Any], bool, dict[str, Any
 
 
 DEFAULT_ZONE_RANGES = [
-    {"id": 1, "min": 26.0, "max": 32.0},
-    {"id": 2, "min": 26.0, "max": 32.0},
-    {"id": 3, "min": 26.0, "max": 32.0},
-    {"id": 4, "min": 26.0, "max": 32.0},
+    {"id": 1, "min": 27.0, "max": 29.0},
+    {"id": 2, "min": 27.0, "max": 29.0},
+    {"id": 3, "min": 27.0, "max": 29.0},
+    {"id": 4, "min": 27.0, "max": 29.0},
 ]
 
 
@@ -2040,12 +2069,37 @@ async def _hold_last_positive(ident: str, snap: dict[str, Any]) -> None:
             snap[key] = value
 
 
+async def _hold_last_zones(ident: str, snap: dict[str, Any]) -> None:
+    missing = [z for z in (snap.get("zones") or []) if z.get("temp") is None]
+    if not missing:
+        return
+    found: dict[int, float | None] = {int(z["id"]): None for z in missing}
+    cursor = db.seguimiento.find(
+        {"i": ident, "kind": "info"},
+        {"_id": 0, "snapshot": 1},
+    ).sort("ts", -1).limit(400)
+    async for row in cursor:
+        shot = row.get("snapshot") or {}
+        for zid in list(found):
+            if found[zid] is not None:
+                continue
+            value = capi._zone_c(shot.get(f"usda{zid}_c"))
+            if value is not None:
+                found[zid] = value
+        if all(value is not None for value in found.values()):
+            break
+    for zone in snap.get("zones") or []:
+        if zone.get("temp") is None and found.get(int(zone["id"])) is not None:
+            zone["temp"] = found[int(zone["id"])]
+
+
 @app.get("/api/client/live")
 async def client_live(ident: str = capi.IDENT_DEFAULT):
     latest, online, sess = await _unit_context(ident)
     names = await _relay_names_for(ident)
     snap = capi.build_live(latest, ident=ident, online=online, names=names)
     await _hold_last_positive(ident, snap)
+    await _hold_last_zones(ident, snap)
     snap["session_id"] = (sess or {}).get("session_id")
     snap["ip"] = (sess or {}).get("ip")
     snap["addr"] = (sess or {}).get("addr")
