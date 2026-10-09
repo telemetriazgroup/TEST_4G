@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { enqueueCommand, type LiveSnapshot } from "../api";
 
-export default function Reles({ live }: { live: LiveSnapshot | null }) {
+export default function Reles({ live, username }: { live: LiveSnapshot | null; username: string }) {
   const [busy, setBusy] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const relays = live?.relays || [];
@@ -13,17 +13,19 @@ export default function Reles({ live }: { live: LiveSnapshot | null }) {
 
   const toggle = async (id: number) => {
     if (!known || !live) return;
-    const bits = slots.map((s) => ((s.id === id ? !s.on : s.on) ? "0" : "1")).join("");
+    const nextOn = !slots.find((s) => s.id === id)?.on;
+    const bits = slots.map((s) => ((s.id === id ? nextOn : s.on) ? "0" : "1")).join("");
     setBusy(id);
     setNote("");
     try {
-      const res = await enqueueCommand({
+      await enqueueCommand({
         ident: live.ident || "POLLO_BEBE",
         ip: live.ip || null,
         addr: live.addr || null,
         kind: "relay_set",
         bits,
-        label: `Relé ${id}`,
+        label: `Relé ${id} → ${nextOn ? "ON" : "OFF"}`,
+        username,
       });
       setNote(`Relé ${id} encolado en la sesión del serial. Si no sale en 10 min se cancela.`);
     } catch (e) {

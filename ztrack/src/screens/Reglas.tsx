@@ -76,6 +76,7 @@ export default function Reglas({ live, username }: { live: LiveSnapshot | null; 
       kind: "pantalla_cmd",
       reglas,
       label,
+      username,
     });
     setNote(res.status === "queued" ? "Programa encolado" : "Programa guardado como referencia: el equipo no tiene sesión");
   };

@@ -10,6 +10,7 @@ import Reles from './screens/Reles'
 import Reglas from './screens/Reglas'
 import Perfil from './screens/Perfil'
 import Usuarios from './screens/Usuarios'
+import Historial from './screens/Historial'
 import { fetchLive, type LiveSnapshot, type Session } from './api'
 
 const SESSION_KEY = 'ztrack_client_session'
@@ -36,7 +37,7 @@ function clearStoredSession() {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Route = 'principal' | 'avisos' | 'historico' | 'comandos' | 'reles' | 'reglas' | 'usuarios' | 'perfil' | 'configuracion' | 'administracion'
+type Route = 'principal' | 'avisos' | 'historico' | 'historial' | 'comandos' | 'reles' | 'reglas' | 'usuarios' | 'perfil' | 'configuracion' | 'administracion'
 
 const HIDDEN_ALARMS = 'ztrack_hidden_alarms'
 type Dark = boolean | null // true = dark, false = light, null = system
@@ -170,6 +171,7 @@ const NAV: NavItem[] = [
   { id: 'comandos',      label: 'Comandos',       short: 'Comandos',  Icon: IcCmd },
   { id: 'reles',         label: 'Relés',          short: 'Relés',     Icon: IcCmd },
   { id: 'reglas',        label: 'Reglas',         short: 'Reglas',    Icon: IcSettings },
+  { id: 'historial',     label: 'Historial',      short: 'Historial', Icon: IcHistory },
   { id: 'usuarios',      label: 'Usuarios',       short: 'Cuenta',    Icon: IcAdmin },
   { id: 'configuracion', label: 'Configuración',  short: 'Config.',   Icon: IcSettings },
 ]
@@ -271,8 +273,9 @@ export default function App() {
     configuracion:  <Configuracion live={live} />,
     administracion: <Administracion />,
     historico:      <Historico ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
-    comandos:       <Comandos live={live} />,
-    reles:          <Reles live={live} />,
+    comandos:       <Comandos live={live} username={session?.username || ''} />,
+    reles:          <Reles live={live} username={session?.username || ''} />,
+    historial:      <Historial ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
     reglas:         <Reglas live={live} username={session?.username || ''} />,
     perfil:         session ? <Perfil session={session} onSaved={updateSession} /> : null,
     usuarios:       <Usuarios username={session?.username || ''} isAdmin={isAdmin} />,

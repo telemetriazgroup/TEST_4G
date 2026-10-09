@@ -27,6 +27,27 @@
     sessionStorage.removeItem(SESSION_KEY);
   }
 
+  function takeHandoff() {
+    const hash = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+    if (!hash) return;
+    const raw = new URLSearchParams(hash).get("sesion");
+    if (!raw) return;
+    try {
+      const session = JSON.parse(raw);
+      if (session && session.role === "superadmin") {
+        writeSession({
+          role: "superadmin",
+          username: session.username || "superadmin",
+          name: session.name || "Superadmin",
+          ident: session.ident || "POLLO_BEBE",
+        }, true);
+      }
+    } catch (_) {}
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  takeHandoff();
+
   function applyShell(session) {
     const login = document.getElementById("appLogin");
     const serial = document.getElementById("shellSerial");
@@ -1309,11 +1330,18 @@
   }
 
   // ---- Devices ----
+  let pickedSession = false;
+
   async function loadDevices() {
     try {
       const r = await fetch(`${API}/api/devices`);
       const data = await r.json();
-      renderDevices(data.devices || []);
+      const devices = data.devices || [];
+      renderDevices(devices);
+      if (!pickedSession && !selected && devices.length) {
+        pickedSession = true;
+        selectDevice(devices.find((d) => d.session_id) || devices[0]);
+      }
     } catch (e) {
       console.warn(e);
     }

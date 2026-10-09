@@ -111,7 +111,13 @@ export default function LoginScreen({ onLogin }: { onLogin: (session: LocalSessi
 
   const finishLogin = (session: LocalSession) => {
     if (session.role === 'superadmin') {
-      window.location.href = serialUrl()
+      const sesion = encodeURIComponent(JSON.stringify({
+        role: 'superadmin',
+        username: session.username,
+        name: session.name,
+        ident: session.ident,
+      }))
+      window.location.href = `${serialUrl()}/#sesion=${sesion}`
       return
     }
     onLogin(session, remember)

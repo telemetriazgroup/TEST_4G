@@ -149,6 +149,32 @@ export async function fetchCommandCatalog(ident = "POLLO_BEBE") {
   return r.json();
 }
 
+export type CommandHistoryItem = {
+  queue_id?: string;
+  ts?: string;
+  enqueued_at?: string;
+  sent_at?: string | null;
+  status?: string;
+  reason?: string | null;
+  kind?: string;
+  origin?: string;
+  label?: string | null;
+  expected?: string | number | null;
+  i?: string;
+  ip?: string | null;
+  username?: string | null;
+  session_id?: string | null;
+};
+
+export async function fetchCommandHistory(ident = "POLLO_BEBE", tipo = "all", limit = 300) {
+  const q = new URLSearchParams({ ident, limit: String(limit) });
+  if (tipo && tipo !== "all") q.set("tipo", tipo);
+  const r = await fetch(`${API}/api/comandos/sent?${q}`);
+  if (!r.ok) throw new Error("No se pudo leer el historial");
+  const data = await r.json();
+  return (data.items || []) as CommandHistoryItem[];
+}
+
 export async function enqueueCommand(body: Record<string, unknown>) {
   const r = await fetch(`${API}/api/comandos/enqueue`, {
     method: "POST",

@@ -119,6 +119,7 @@ class ComandoBody(BaseModel):
     modo: str = "DEC"
     label: str | None = None
     window: str = "any"
+    username: str | None = None
 
 
 class ClientLoginBody(BaseModel):
@@ -1614,7 +1615,8 @@ async def comandos_enqueue(body: ComandoBody):
         "addr": (sess or {}).get("addr") or body.addr,
         "ip": (sess or {}).get("ip") or body.ip,
         "session_id": (sess or {}).get("session_id") or body.session_id,
-        "origin": "reglas" if built.get("kind") == "pantalla_cmd" else "ui",
+        "origin": _historial_tipo(built.get("kind")),
+        "username": (body.username or "").strip() or None,
         "timed": bool(built.get("timed")),
         "built": built,
     }
@@ -1652,11 +1654,20 @@ async def comandos_queue(addr: str | None = None, ip: str | None = None):
     }
 
 
+def _historial_tipo(kind: str | None) -> str:
+    if kind == "pantalla_cmd":
+        return "reglas"
+    if kind in {"relay_set", "relay_pot"}:
+        return "reles"
+    return "comandos"
+
+
 @app.get("/api/comandos/sent")
 async def comandos_sent(
     ident: str | None = None,
     ip: str | None = None,
     status: str | None = None,
+    tipo: str | None = None,
     limit: int = 200,
 ):
     q: dict[str, Any] = {}
@@ -1666,6 +1677,12 @@ async def comandos_sent(
         q["ip"] = ip
     if status and status != "all":
         q["status"] = status
+    if tipo == "comandos":
+        q["kind"] = "mp5000_write"
+    elif tipo == "reles":
+        q["kind"] = {"$in": ["relay_set", "relay_pot"]}
+    elif tipo == "reglas":
+        q["kind"] = "pantalla_cmd"
     limit = max(1, min(limit, 1000))
     rows = await db.comandos.find(q, {"_id": 0}).sort("enqueued_at", -1).limit(limit).to_list(limit)
     return {

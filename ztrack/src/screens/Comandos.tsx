@@ -12,7 +12,7 @@ const card: CSSProperties = {
   padding: 16,
 }
 
-export default function Comandos({ live }: { live: LiveSnapshot | null }) {
+export default function Comandos({ live, username }: { live: LiveSnapshot | null; username: string }) {
   const [fields, setFields] = useState<FieldRow[]>([])
   const [actions, setActions] = useState<ActionRow[]>([])
   const [values, setValues] = useState<Record<number, string>>({})
@@ -47,6 +47,7 @@ export default function Comandos({ live }: { live: LiveSnapshot | null }) {
         idx,
         value: value === '' ? 1 : Number(value),
         label,
+        username,
       })
       setNote(`Encolado en la sesión del serial: ${label}. Si no sale en 10 min se cancela.`)
     } catch (e) {
