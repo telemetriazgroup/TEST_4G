@@ -57,17 +57,21 @@ function toRows(points: SeriesPoint[]): Row[] {
   return points
     .map((p) => {
       const ts = new Date(p.ts).getTime();
+      const supply = num(p.supply_air_c) === 0 ? null : num(p.supply_air_c);
+      const return_ = num(p.return_air_c) === 0 ? null : num(p.return_air_c);
+      const humidity = num(p.humidity_pct) === 0 ? null : num(p.humidity_pct);
+      const bad = supply == null && return_ == null && humidity == null;
       return {
         ts,
-        supply: num(p.supply_air_c) === 0 ? null : num(p.supply_air_c),
-        return_: num(p.return_air_c) === 0 ? null : num(p.return_air_c),
-        setpoint: num(p.setpoint_c),
-        z1: num(p.usda1_c),
-        z2: num(p.usda2_c),
-        z3: num(p.usda3_c),
-        z4: num(p.usda4_c),
-        humidity: num(p.humidity_pct) === 0 ? null : num(p.humidity_pct),
-        co2: num(p.co2_pct),
+        supply,
+        return_,
+        humidity,
+        setpoint: bad ? null : num(p.setpoint_c),
+        z1: bad ? null : num(p.usda1_c),
+        z2: bad ? null : num(p.usda2_c),
+        z3: bad ? null : num(p.usda3_c),
+        z4: bad ? null : num(p.usda4_c),
+        co2: bad ? null : num(p.co2_pct),
       };
     })
     .filter((r) => Number.isFinite(r.ts))

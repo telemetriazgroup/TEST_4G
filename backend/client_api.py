@@ -65,6 +65,20 @@ def _positive(*values: Any) -> float | None:
     return None
 
 
+def _is_zero(value: Any) -> bool:
+    n = _num(value)
+    return n == 0
+
+
+def bad_info_frame(snap: dict[str, Any]) -> bool:
+    """Suministro, retorno y humedad en 0: la trama entera es mala lectura."""
+    return (
+        _is_zero(snap.get("supply_air_c"))
+        and _is_zero(snap.get("return_air_c"))
+        and _is_zero(snap.get("humidity_pct"))
+    )
+
+
 def _latest_ts(latest: dict[str, Any]) -> datetime | None:
     times: list[datetime] = []
     for kind in ("info", "relay", "mp5000"):
@@ -158,6 +172,22 @@ def build_series(rows: list[dict[str, Any]], hours: int = 6) -> dict[str, Any]:
     for row in rows:
         snap = row.get("snapshot") or {}
         if row.get("kind") != "info":
+            continue
+        if bad_info_frame(snap):
+            points.append(
+                {
+                    "ts": row.get("ts"),
+                    "supply_air_c": None,
+                    "return_air_c": None,
+                    "setpoint_c": None,
+                    "humidity_pct": None,
+                    "co2_pct": None,
+                    "usda1_c": None,
+                    "usda2_c": None,
+                    "usda3_c": None,
+                    "usda4_c": None,
+                }
+            )
             continue
         points.append(
             {
