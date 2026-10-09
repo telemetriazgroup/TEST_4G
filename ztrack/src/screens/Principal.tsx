@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react'
-import { enqueueCommand, fetchSeries, type LiveSnapshot, type SeriesPoint } from '../api'
+import { fetchSeries, type LiveSnapshot, type SeriesPoint } from '../api'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type TimeRange = '1h' | '6h' | '24h'
@@ -200,7 +200,7 @@ function TruckDiagram({ zones, setpoint }: { zones: ZoneVal[]; setpoint: number 
 }
 
 // ── AlarmBanner ───────────────────────────────────────────────────────────────
-function AlarmBanner({ message, onMute }: { message: string; onMute: () => void }) {
+function AlarmBanner({ message, onHide }: { message: string; onHide: () => void }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setElapsed(e => e + 1), 1000)
@@ -225,11 +225,11 @@ function AlarmBanner({ message, onMute }: { message: string; onMute: () => void 
         </span>
       </div>
       <button
-        onClick={onMute}
+        onClick={onHide}
         className="shrink-0 rounded-[8px] px-3 transition-opacity active:opacity-70"
         style={{ height: '36px', backgroundColor: 'rgba(255,255,255,0.22)', fontSize: '13px', fontWeight: 500, whiteSpace: 'nowrap' }}
       >
-        Silenciar 10 min
+        Quitar
       </button>
     </div>
   )
@@ -659,71 +659,31 @@ function PullIndicator({ distance, refreshing }: { distance: number; refreshing:
   )
 }
 
-function RelayPanel({ live, canControl }: { live: LiveSnapshot | null; canControl: boolean }) {
-  const [busy, setBusy] = useState<number | null>(null)
-  const [note, setNote] = useState('')
+function RelayStatus({ live }: { live: LiveSnapshot | null }) {
   const relays = live?.relays || []
-  const known = relays.length >= 10 && relays.every((r) => r.on != null)
   const slots = Array.from({ length: 10 }, (_, i) => {
     const found = relays.find((r) => r.id === i + 1)
-    return { id: i + 1, name: found?.name || `Relé ${i + 1}`, on: !!found?.on }
+    return { id: i + 1, name: found?.name || `Relé ${i + 1}`, on: found?.on ?? null }
   })
-
-  const toggle = async (id: number) => {
-    if (!canControl || !known || !live) return
-    const bits = slots.map((s) => ((s.id === id ? !s.on : s.on) ? '0' : '1')).join('')
-    setBusy(id)
-    setNote('')
-    try {
-      const res = await enqueueCommand({
-        ident: live.ident || 'POLLO_BEBE',
-        ip: live.ip || null,
-        addr: live.addr || null,
-        kind: 'relay_set',
-        bits,
-        label: `Relé ${id}`,
-      })
-      setNote(res.status === 'queued' ? `Relé ${id} encolado` : `Relé ${id} guardado: el equipo no tiene sesión`)
-    } catch (e) {
-      setNote(e instanceof Error ? e.message : 'No se pudo enviar el relé')
-    } finally {
-      setBusy(null)
-    }
-  }
-
   return (
     <div className="mt-8">
-      <SectionLabel>Control de relés</SectionLabel>
+      <SectionLabel>Estado de relés</SectionLabel>
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
         {slots.map((s) => (
-          <button
+          <div
             key={s.id}
-            type="button"
-            disabled={!canControl || !known || busy != null}
-            onClick={() => toggle(s.id)}
-            className="rounded-[14px] p-3 text-left"
-            style={{
-              background: 'var(--surface)',
-              border: `1px solid ${s.on ? '#3AA76D' : 'var(--sep)'}`,
-              boxShadow: 'var(--shadow)',
-              opacity: canControl ? 1 : 0.85,
-            }}
+            className="rounded-[14px] p-3"
+            style={{ background: 'var(--surface)', border: `1px solid ${s.on ? '#3AA76D' : 'var(--sep)'}`, boxShadow: 'var(--shadow)' }}
           >
             <span className="flex items-center justify-between gap-2">
               <span style={{ fontSize: 12, color: 'var(--text-2)' }}>R{s.id}</span>
               <span style={{ width: 8, height: 8, borderRadius: 99, background: s.on ? '#3AA76D' : '#C5D0DE', display: 'inline-block' }} />
             </span>
             <span className="block mt-1" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{s.name}</span>
-            <span style={{ fontSize: 12, color: s.on ? '#1F9D55' : '#8A97A8', fontWeight: 700 }}>{busy === s.id ? '…' : s.on ? 'ON' : 'OFF'}</span>
-          </button>
+            <span style={{ fontSize: 12, color: s.on ? '#1F9D55' : '#8A97A8', fontWeight: 700 }}>{s.on == null ? '—' : s.on ? 'ON' : 'OFF'}</span>
+          </div>
         ))}
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 8 }}>
-        {canControl
-          ? known ? '0 en el bus enciende el relé. El cambio sale en la próxima ventana del equipo.' : 'Aún no hay una lectura completa de los 10 relés.'
-          : 'El monitoreo ve el estado. Solo un administrador puede cambiarlos.'}
-        {note ? ` ${note}` : ''}
-      </p>
     </div>
   )
 }
@@ -734,17 +694,18 @@ export default function Principal({
   freshnessSec = 0,
   isDataStale = false,
   onRefresh,
-  canControl = false,
+  hiddenAlarms = [],
+  onHideAlarm,
 }: {
   live: LiveSnapshot | null
   freshnessSec?: number
   isDataStale?: boolean
   onRefresh?: () => Promise<void> | void
-  canControl?: boolean
+  hiddenAlarms?: string[]
+  onHideAlarm?: (id: string) => void
 } = { live: null }) {
   const [timeRange, setTimeRange] = useState<TimeRange>('6h')
   const [points, setPoints] = useState<SeriesPoint[]>([])
-  const [alarmMuted, setAlarmMuted] = useState(false)
   const [pullDist, setPullDist] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const touchStartY = useRef(0)
@@ -759,11 +720,6 @@ export default function Principal({
       .catch(() => { if (!cancel) setPoints([]) })
     return () => { cancel = true }
   }, [hours, live?.ident, live?.ts])
-
-  const handleMuteAlarm = () => {
-    setAlarmMuted(true)
-    setTimeout(() => setAlarmMuted(false), 10 * 60 * 1000)
-  }
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -850,7 +806,10 @@ export default function Principal({
     return { level: 'normal', label: 'Condiciones normales' }
   }, [zones, setpoint, live])
 
-  const alarmActive = overallStatus.level === 'critical' && !alarmMuted
+  const alarmHidden = hiddenAlarms.includes(overallStatus.label)
+  const alarmActive = overallStatus.level === 'critical' && !alarmHidden
+  const headerLevel = alarmHidden && overallStatus.level === 'critical' ? 'normal' : overallStatus.level
+  const headerLabel = alarmHidden && overallStatus.level === 'critical' ? 'En seguimiento' : overallStatus.label
   const motors = live?.motors || []
   const motorSpeeds = motors.map((m) => Math.min(m.speed_pct ?? 0, 100))
   const vent = live?.ventilation_pct
@@ -867,7 +826,7 @@ export default function Principal({
     >
       {/* Critical alarm banner (fixed, only when zones are red) */}
       {alarmActive && (
-        <AlarmBanner message={overallStatus.label} onMute={handleMuteAlarm} />
+        <AlarmBanner message={overallStatus.label} onHide={() => onHideAlarm?.(overallStatus.label)} />
       )}
       {alarmActive && <div style={{ height: '52px' }} />}
 
@@ -878,8 +837,8 @@ export default function Principal({
 
       {/* ── Status header ── */}
       <StatusHeader
-        level={overallStatus.level}
-        label={overallStatus.label}
+        level={headerLevel}
+        label={headerLabel}
         freshnessSec={freshnessSec}
         isStale={isStale}
         subtitle={subtitle}
@@ -1004,7 +963,7 @@ export default function Principal({
         />
       </div>
 
-      <RelayPanel live={live} canControl={canControl} />
+      <RelayStatus live={live} />
     </div>
   )
 }

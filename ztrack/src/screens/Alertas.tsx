@@ -38,9 +38,9 @@ export default function Alertas({ live, stale }: { live: LiveSnapshot | null; st
 
   return (
     <div className="flex flex-col gap-3">
-      <h1 className="font-semibold" style={{ fontSize: 22 }}>Avisos</h1>
+      <h1 className="font-semibold" style={{ fontSize: 22 }}>Alarmas</h1>
       <p style={{ fontSize: 13, color: 'var(--text-2)' }}>
-        Alertas de la lectura actual contra los rangos de temperatura de cada zona.
+        Aquí quedan los mensajes, también los que se quitaron del panel.
       </p>
       {notices.map((n, i) => (
         <div

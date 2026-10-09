@@ -1729,6 +1729,61 @@ async def reglas_preview(body: ReglasPreviewBody):
     return built
 
 
+class ProgramaBody(BaseModel):
+    ident: str = "POLLO_BEBE"
+    name: str
+    reglas: list[dict[str, Any]] = Field(default_factory=list)
+    username: str = ""
+
+
+@app.get("/api/reglas/programas")
+async def reglas_programas(ident: str = "POLLO_BEBE"):
+    rows = await db.control_rules.find({"ident": ident}, {"ident": 1, "name": 1, "reglas": 1, "created_at": 1, "username": 1}).sort("created_at", -1).to_list(100)
+    out = []
+    for row in rows:
+        row["id"] = str(row.pop("_id"))
+        out.append(row)
+    return {"programas": out}
+
+
+@app.post("/api/reglas/programas")
+async def reglas_programas_save(body: ProgramaBody):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "La regla necesita un nombre")
+    if not body.reglas:
+        raise HTTPException(400, "Agrega al menos un paso")
+    try:
+        built = regl.build_program(body.reglas, ident=body.ident)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    if built.get("errors"):
+        raise HTTPException(400, "; ".join(built["errors"]))
+    doc = {
+        "ident": body.ident,
+        "name": name,
+        "reglas": body.reglas,
+        "label": built.get("label"),
+        "username": body.username.strip().lower(),
+        "created_at": _now(),
+    }
+    result = await db.control_rules.insert_one(doc)
+    return {"ok": True, "id": str(result.inserted_id), "label": built.get("label")}
+
+
+@app.delete("/api/reglas/programas/{pid}")
+async def reglas_programas_delete(pid: str):
+    from bson import ObjectId
+    try:
+        oid = ObjectId(pid)
+    except Exception as e:
+        raise HTTPException(400, "id inválido") from e
+    result = await db.control_rules.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Regla no encontrada")
+    return {"ok": True}
+
+
 @app.post("/api/comandos/queue/clear")
 async def comandos_queue_clear():
     now = _now()
@@ -1781,10 +1836,23 @@ async def _ensure_client_users() -> None:
     )
 
 
+def _display_name(user: dict[str, Any], key: str) -> str:
+    nombre = str(user.get("nombre") or "").strip()
+    apellido = str(user.get("apellido") or "").strip()
+    full = f"{nombre} {apellido}".strip()
+    return full or str(user.get("name") or key)
+
+
 def _public_user(doc: dict[str, Any]) -> dict[str, Any]:
+    key = str(doc.get("username") or "")
     return {
-        "username": doc.get("username"),
-        "name": doc.get("name") or doc.get("username"),
+        "username": key,
+        "name": _display_name(doc, key),
+        "nombre": doc.get("nombre") or "",
+        "apellido": doc.get("apellido") or "",
+        "correo": doc.get("correo") or "",
+        "cargo": doc.get("cargo") or "",
+        "empresa": doc.get("empresa") or "",
         "role": doc.get("role") or "monitor",
     }
 
@@ -1807,6 +1875,15 @@ class ZoneRangeBody(BaseModel):
     zones: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ClientProfileBody(BaseModel):
+    username: str
+    nombre: str = ""
+    apellido: str = ""
+    correo: str = ""
+    cargo: str = ""
+    empresa: str = ""
+
+
 @app.post("/api/client/login")
 async def client_login(body: ClientLoginBody):
     key = (body.username or "").strip().lower()
@@ -1814,13 +1891,56 @@ async def client_login(body: ClientLoginBody):
     user = doc or CLIENT_USERS.get(key)
     if not user or user.get("password") != (body.password or ""):
         raise HTTPException(401, "Usuario o contraseña incorrectos")
+    profile = _public_user({**user, "username": key}) if isinstance(user, dict) else {"username": key, "name": key}
     return {
         "ok": True,
         "role": user.get("role"),
-        "name": user.get("name") or key,
+        "name": profile.get("name") or key,
         "username": key,
         "ident": capi.IDENT_DEFAULT,
+        "nombre": profile.get("nombre") or "",
+        "apellido": profile.get("apellido") or "",
+        "correo": profile.get("correo") or "",
+        "cargo": profile.get("cargo") or "",
+        "empresa": profile.get("empresa") or "",
     }
+
+
+@app.get("/api/client/profile")
+async def client_profile(username: str):
+    key = username.strip().lower()
+    doc = await db.client_users.find_one({"username": key}, {"_id": 0, "password": 0})
+    if not doc:
+        seed = CLIENT_USERS.get(key)
+        if not seed:
+            raise HTTPException(404, "Usuario no encontrado")
+        doc = {"username": key, **seed}
+    return _public_user(doc)
+
+
+@app.put("/api/client/profile")
+async def client_profile_save(body: ClientProfileBody):
+    key = body.username.strip().lower()
+    doc = await db.client_users.find_one({"username": key})
+    if not doc:
+        seed = CLIENT_USERS.get(key)
+        if not seed:
+            raise HTTPException(404, "Usuario no encontrado")
+        doc = {"username": key, **seed}
+        await db.client_users.insert_one(dict(doc))
+    nombre = body.nombre.strip()
+    apellido = body.apellido.strip()
+    fields = {
+        "nombre": nombre,
+        "apellido": apellido,
+        "correo": body.correo.strip(),
+        "cargo": body.cargo.strip(),
+        "empresa": body.empresa.strip(),
+        "name": f"{nombre} {apellido}".strip() or doc.get("name") or key,
+    }
+    await db.client_users.update_one({"username": key}, {"$set": fields})
+    saved = await db.client_users.find_one({"username": key}, {"_id": 0, "password": 0})
+    return {"ok": True, "user": _public_user(saved or {**doc, **fields})}
 
 
 @app.get("/api/client/users")

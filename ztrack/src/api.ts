@@ -44,6 +44,22 @@ export type Session = {
   name: string;
   username: string;
   ident: string;
+  nombre?: string;
+  apellido?: string;
+  correo?: string;
+  cargo?: string;
+  empresa?: string;
+};
+
+export type Profile = {
+  username: string;
+  name: string;
+  nombre: string;
+  apellido: string;
+  correo: string;
+  cargo: string;
+  empresa: string;
+  role: string;
 };
 
 const API = import.meta.env.VITE_API_URL ?? "";
@@ -141,6 +157,55 @@ export async function enqueueCommand(body: Record<string, unknown>) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.detail || "No se pudo encolar el comando");
+  return data;
+}
+
+export async function fetchProfile(username: string): Promise<Profile> {
+  const r = await fetch(`${API}/api/client/profile?username=${encodeURIComponent(username)}`);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo leer el perfil");
+  return data;
+}
+
+export async function saveProfile(body: Profile) {
+  const r = await fetch(`${API}/api/client/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo guardar el perfil");
+  return data.user as Profile;
+}
+
+export async function fetchRuleCatalog(ident = "POLLO_BEBE") {
+  const r = await fetch(`${API}/api/reglas/catalog?ident=${encodeURIComponent(ident)}`);
+  if (!r.ok) throw new Error("No se pudo leer el catálogo de reglas");
+  return r.json();
+}
+
+export async function fetchPrograms(ident = "POLLO_BEBE") {
+  const r = await fetch(`${API}/api/reglas/programas?ident=${encodeURIComponent(ident)}`);
+  if (!r.ok) throw new Error("No se pudieron leer las reglas");
+  const data = await r.json();
+  return data.programas || [];
+}
+
+export async function saveProgram(body: { ident: string; name: string; reglas: unknown[]; username: string }) {
+  const r = await fetch(`${API}/api/reglas/programas`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo guardar la regla");
+  return data;
+}
+
+export async function deleteProgram(id: string) {
+  const r = await fetch(`${API}/api/reglas/programas/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo borrar la regla");
   return data;
 }
 

@@ -6,6 +6,9 @@ import Administracion from './screens/Administracion'
 import Historico from './screens/Historico'
 import Alertas from './screens/Alertas'
 import Comandos from './screens/Comandos'
+import Reles from './screens/Reles'
+import Reglas from './screens/Reglas'
+import Perfil from './screens/Perfil'
 import Usuarios from './screens/Usuarios'
 import { fetchLive, type LiveSnapshot, type Session } from './api'
 
@@ -33,7 +36,9 @@ function clearStoredSession() {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Route = 'principal' | 'avisos' | 'historico' | 'comandos' | 'usuarios' | 'configuracion' | 'administracion'
+type Route = 'principal' | 'avisos' | 'historico' | 'comandos' | 'reles' | 'reglas' | 'usuarios' | 'perfil' | 'configuracion' | 'administracion'
+
+const HIDDEN_ALARMS = 'ztrack_hidden_alarms'
 type Dark = boolean | null // true = dark, false = light, null = system
 
 // ── SVG base props ────────────────────────────────────────────────────────────
@@ -160,9 +165,11 @@ type NavItem = { id: Route; label: string; short: string; Icon: ({ sz }: { sz?: 
 
 const NAV: NavItem[] = [
   { id: 'principal',     label: 'Panel',          short: 'Panel',     Icon: IcHome },
-  { id: 'avisos',        label: 'Avisos',         short: 'Avisos',    Icon: IcBell },
+  { id: 'avisos',        label: 'Alarmas',        short: 'Alarmas',   Icon: IcBell },
   { id: 'historico',     label: 'Histórico',      short: 'Histórico', Icon: IcHistory },
   { id: 'comandos',      label: 'Comandos',       short: 'Comandos',  Icon: IcCmd },
+  { id: 'reles',         label: 'Relés',          short: 'Relés',     Icon: IcCmd },
+  { id: 'reglas',        label: 'Reglas',         short: 'Reglas',    Icon: IcSettings },
   { id: 'usuarios',      label: 'Usuarios',       short: 'Cuenta',    Icon: IcAdmin },
   { id: 'configuracion', label: 'Configuración',  short: 'Config.',   Icon: IcSettings },
 ]
@@ -190,6 +197,10 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(readStoredSession)
   const [live, setLive] = useState<LiveSnapshot | null>(null)
   const [route, setRoute] = useState<Route>('principal')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [hiddenAlarms, setHiddenAlarms] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(HIDDEN_ALARMS) || '[]') } catch { return [] }
+  })
   const [dark, setDark] = useState<Dark>(false)
   const [freshnessSec, setFreshnessSec] = useState(0)
   const [isDataStale, setIsDataStale] = useState(false)
@@ -225,10 +236,24 @@ export default function App() {
   }, [authenticated, loadLive])
 
   useEffect(() => {
-    if (!isAdmin && (route === 'administracion' || route === 'configuracion' || route === 'comandos')) {
+    if (!isAdmin && (route === 'administracion' || route === 'configuracion' || route === 'comandos' || route === 'reles' || route === 'reglas')) {
       setRoute('principal')
     }
   }, [route, isAdmin])
+
+  const hideAlarm = (id: string) => {
+    setHiddenAlarms((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id]
+      localStorage.setItem(HIDDEN_ALARMS, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const updateSession = (next: Session) => {
+    const remember = !!localStorage.getItem(SESSION_KEY)
+    writeStoredSession(next, remember)
+    setSession(next)
+  }
 
   const dataTheme = dark === null ? undefined : dark ? 'dark' : 'light'
   const toggleDark = () => setDark(d => (d === true ? false : true))
@@ -236,17 +261,20 @@ export default function App() {
   const themeLabel = dark === true ? 'Oscuro' : dark === false ? 'Claro' : 'Sistema'
 
   const navItems = NAV.filter((n) => {
-    if (n.id === 'comandos' || n.id === 'configuracion') return isAdmin
+    if (n.id === 'comandos' || n.id === 'reles' || n.id === 'reglas' || n.id === 'configuracion') return isAdmin
     return true
   })
 
   const screens: Record<Route, ReactNode> = {
-    principal:      <Principal live={live} freshnessSec={freshnessSec} isDataStale={isDataStale} onRefresh={loadLive} canControl={isAdmin} />,
+    principal:      <Principal live={live} freshnessSec={freshnessSec} isDataStale={isDataStale} onRefresh={loadLive} hiddenAlarms={hiddenAlarms} onHideAlarm={hideAlarm} />,
     avisos:         <Alertas live={live} stale={isDataStale} />,
     configuracion:  <Configuracion live={live} />,
     administracion: <Administracion />,
     historico:      <Historico ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
     comandos:       <Comandos live={live} />,
+    reles:          <Reles live={live} />,
+    reglas:         <Reglas live={live} username={session?.username || ''} />,
+    perfil:         session ? <Perfil session={session} onSaved={updateSession} /> : null,
     usuarios:       <Usuarios username={session?.username || ''} isAdmin={isAdmin} />,
   }
 
@@ -383,27 +411,28 @@ export default function App() {
             </span>
           </div>
 
-          {/* Avatar */}
-          <button
-            type="button"
-            title="Cerrar sesión"
-            onClick={() => {
-              clearStoredSession()
-              setSession(null)
-              setRoute('principal')
-            }}
-            className="flex items-center justify-center rounded-full shrink-0 select-none font-semibold"
-            style={{
-              width: '32px',
-              height: '32px',
-              backgroundColor: 'var(--sep)',
-              color: 'var(--text-2)',
-              fontSize: '11px',
-              letterSpacing: '0.04em',
-            }}
-          >
-            {(session?.name || 'US').slice(0, 2).toUpperCase()}
-          </button>
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              className="flex items-center gap-2"
+              style={{ color: 'var(--text)' }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{session?.name || 'Usuario'}</span>
+              <span
+                className="flex items-center justify-center rounded-full shrink-0 select-none font-semibold"
+                style={{ width: 32, height: 32, backgroundColor: 'var(--sep)', color: 'var(--text-2)', fontSize: 11 }}
+              >
+                {(session?.name || 'US').slice(0, 2).toUpperCase()}
+              </span>
+            </button>
+            {menuOpen && (
+              <div style={{ position: 'absolute', right: 0, top: 42, zIndex: 40, minWidth: 180, background: '#fff', border: '1px solid var(--sep)', borderRadius: 12, boxShadow: 'var(--card-shadow)', padding: 6 }}>
+                <button type="button" onClick={() => { setRoute('perfil'); setMenuOpen(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', height: 36, padding: '0 10px', borderRadius: 8, fontSize: 14 }}>Mi perfil</button>
+                <button type="button" onClick={() => { clearStoredSession(); setSession(null); setRoute('principal'); setMenuOpen(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', height: 36, padding: '0 10px', borderRadius: 8, fontSize: 14, color: '#E24B4B' }}>Cerrar sesión</button>
+              </div>
+            )}
+          </div>
         </header>
 
         {/* Mobile header */}
@@ -417,13 +446,21 @@ export default function App() {
             borderBottom: '1px solid var(--sep)',
           }}
         >
-          <div className="flex-1 min-w-0">
-            <p
-              className="truncate font-semibold"
+          <div className="flex-1 min-w-0" style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              className="truncate font-semibold text-left"
               style={{ fontSize: '16px', color: 'var(--text)', letterSpacing: '-0.02em' }}
             >
-              {live?.ident || 'POLLO_BEBE'}
-            </p>
+              {session?.name || live?.ident || 'POLLO_BEBE'}
+            </button>
+            {menuOpen && (
+              <div style={{ position: 'absolute', right: 12, top: 44, zIndex: 40, minWidth: 180, background: '#fff', border: '1px solid var(--sep)', borderRadius: 12, boxShadow: 'var(--card-shadow)', padding: 6 }}>
+                <button type="button" onClick={() => { setRoute('perfil'); setMenuOpen(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', height: 36, padding: '0 10px', borderRadius: 8 }}>Mi perfil</button>
+                <button type="button" onClick={() => { clearStoredSession(); setSession(null); setRoute('principal'); setMenuOpen(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', height: 36, padding: '0 10px', borderRadius: 8, color: '#E24B4B' }}>Cerrar sesión</button>
+              </div>
+            )}
           </div>
           <span style={{ fontSize: '12px', color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
             {isDataStale ? `Sin datos ${Math.floor(freshnessSec / 60)} min` : freshnessSec < 60 ? `${freshnessSec} s` : `${Math.floor(freshnessSec / 60)} min`}
