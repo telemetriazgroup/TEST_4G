@@ -259,3 +259,59 @@ def classify_frame(doc: dict[str, Any]) -> dict[str, Any]:
     if incomplete:
         result["status"] = "incomplete"
     return result
+
+
+def fecha_export(ts: str | None) -> str | None:
+    """Reloj de Lima escrito como UTC. Solo para el archivo que se importa en MongoDB."""
+    if not ts:
+        return None
+    raw = str(ts).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(env_tz())
+    ms = local.microsecond // 1000
+    return (
+        f"{local.year:04d}-{local.month:02d}-{local.day:02d}"
+        f"T{local.hour:02d}:{local.minute:02d}:{local.second:02d}.{ms:03d}Z"
+    )
+
+
+def fecha_from_hour(hour: str | None) -> str | None:
+    text = str(hour or "").strip()
+    if len(text) < 16 or text == "desconocida":
+        return None
+    return f"{text[:10]}T{text[11:16]}:00.000Z"
+
+
+def mongo_import_doc(payload: dict[str, Any] | None, fecha: str | None) -> dict[str, Any]:
+    """Documento con la forma que ya guarda la otra base: estado 1 y fecha de la trama."""
+    src = payload or {}
+    return {
+        "i": src.get("i"),
+        "ip": None,
+        "c": None,
+        "d00": None,
+        "d01": src.get("d01"),
+        "d02": src.get("d02"),
+        "d03": src.get("d03"),
+        "d04": None,
+        "d05": None,
+        "d06": None,
+        "d07": None,
+        "d08": src.get("d08"),
+        "d09": None,
+        "d1": None,
+        "d2": None,
+        "d3": None,
+        "d4": None,
+        "gps": None,
+        "va": None,
+        "rs": None,
+        "r": None,
+        "estado": 1,
+        "fecha": {"$date": fecha} if fecha else None,
+    }

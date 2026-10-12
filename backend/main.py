@@ -10,6 +10,7 @@ Persistencia:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -20,6 +21,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1241,6 +1243,7 @@ async def _enqueue_candidates(items: list[dict[str, Any]]) -> dict[str, Any]:
                 "i": item.get("i"),
                 "addr": item.get("addr"),
                 "ip": item.get("ip"),
+                "message_ts": item.get("ts"),
                 "status": "queued",
                 "enqueued_at": _now(),
             }
@@ -1302,6 +1305,7 @@ async def _homologate_queue_worker() -> None:
                 "message_id": job.get("message_id"),
                 "addr": job.get("addr"),
                 "ip": job.get("ip"),
+                "message_ts": job.get("message_ts"),
                 "source": "queue",
             }
             try:
@@ -1448,6 +1452,73 @@ async def homologate_sent(
         "host": homo.destination_host(),
         "queue": _queue_snapshot(),
     }
+
+
+async def _error_import_docs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    need: list[ObjectId] = []
+    for row in rows:
+        if row.get("message_ts") or not row.get("message_id"):
+            continue
+        try:
+            need.append(ObjectId(str(row["message_id"])))
+        except Exception:
+            continue
+    found: dict[str, str] = {}
+    if need:
+        docs = await db.messages.find({"_id": {"$in": need}}, {"ts": 1}).to_list(len(need))
+        found = {str(doc["_id"]): doc.get("ts") for doc in docs}
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        payload = row.get("payload") or {}
+        if not payload.get("d02") or not payload.get("d03"):
+            continue
+        ts = row.get("message_ts") or found.get(str(row.get("message_id") or ""))
+        fecha = homo.fecha_export(ts) if ts else homo.fecha_from_hour(row.get("hour"))
+        if not fecha:
+            fecha = homo.fecha_export(row.get("ts"))
+        out.append(homo.mongo_import_doc(payload, fecha))
+    return out
+
+
+@app.get("/api/homologate/errors/export")
+async def homologate_errors_export():
+    """JSON extendido de las tramas que no llegaron a la API, listo para mongoimport."""
+
+    async def chunks():
+        first = True
+        batch: list[dict[str, Any]] = []
+        cursor = db.homologate_log.find({"status": "error"}).sort("ts", 1)
+
+        async def flush(rows: list[dict[str, Any]]) -> bytes:
+            nonlocal first
+            parts: list[str] = []
+            for doc in await _error_import_docs(rows):
+                raw = json.dumps(doc, ensure_ascii=False)
+                if first:
+                    first = False
+                    parts.append("[\n" + raw)
+                else:
+                    parts.append(",\n" + raw)
+            return "".join(parts).encode()
+
+        async for row in cursor:
+            batch.append(row)
+            if len(batch) >= 200:
+                blob = await flush(batch)
+                if blob:
+                    yield blob
+                batch = []
+        if batch:
+            blob = await flush(batch)
+            if blob:
+                yield blob
+        yield b"[]" if first else b"\n]\n"
+
+    return StreamingResponse(
+        chunks(),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="errores_mongodb.json"'},
+    )
 
 
 def _seguimiento_query(
@@ -2152,6 +2223,97 @@ async def client_series(
         if len(rows) >= 100000:
             break
     return capi.build_series(rows, span_h)
+
+
+READING_FIELDS = (
+    "supply_air_c",
+    "return_air_c",
+    "setpoint_c",
+    "humidity_pct",
+    "co2_pct",
+    "usda1_c",
+    "usda2_c",
+    "usda3_c",
+    "usda4_c",
+)
+
+
+class ReadingPatch(BaseModel):
+    fields: dict[str, Any] = Field(default_factory=dict)
+    void: bool = False
+    restore: bool = False
+
+
+@app.get("/api/client/readings")
+async def client_readings(
+    ident: str = capi.IDENT_DEFAULT,
+    start: str | None = None,
+    end: str | None = None,
+    skip: int = 0,
+    limit: int = 80,
+):
+    """Valores guardados, incluidos los que distorsionan el gráfico, para corregirlos."""
+    q: dict[str, Any] = {"i": ident, "kind": "info"}
+    if start or end:
+        rng: dict[str, str] = {}
+        if start:
+            rng["$gte"] = start
+        if end:
+            rng["$lte"] = end
+        q["ts"] = rng
+    skip = max(0, skip)
+    limit = max(1, min(limit, 200))
+    total = await db.seguimiento.count_documents(q)
+    items: list[dict[str, Any]] = []
+    cursor = db.seguimiento.find(q).sort("ts", 1).skip(skip).limit(limit)
+    async for row in cursor:
+        snap = row.get("snapshot") or {}
+        item: dict[str, Any] = {
+            "id": str(row["_id"]),
+            "ts": row.get("ts"),
+            "voided": bool(snap.get("voided")),
+        }
+        for key in READING_FIELDS:
+            item[key] = capi._num(snap.get(key))
+        items.append(item)
+    return {"total": total, "skip": skip, "limit": limit, "items": items}
+
+
+@app.patch("/api/client/readings/{reading_id}")
+async def client_reading_patch(reading_id: str, body: ReadingPatch):
+    try:
+        oid = ObjectId(reading_id)
+    except Exception as e:
+        raise HTTPException(400, "id inválido") from e
+    doc = await db.seguimiento.find_one({"_id": oid, "kind": "info"})
+    if not doc:
+        raise HTTPException(404, "lectura no encontrada")
+    snap = dict(doc.get("snapshot") or {})
+    if not isinstance(snap.get("original"), dict):
+        snap["original"] = {key: snap.get(key) for key in READING_FIELDS}
+    if body.restore:
+        original = snap.get("original") or {}
+        for key in READING_FIELDS:
+            if key in original:
+                snap[key] = original[key]
+        snap["voided"] = False
+    elif body.void:
+        snap["voided"] = True
+    else:
+        snap["voided"] = False
+        for key, value in (body.fields or {}).items():
+            if key not in READING_FIELDS:
+                continue
+            if value is None or value == "":
+                snap[key] = None
+                continue
+            try:
+                snap[key] = float(value)
+            except (TypeError, ValueError) as e:
+                raise HTTPException(400, f"valor inválido en {key}") from e
+    snap["corrected_at"] = _now()
+    await db.seguimiento.update_one({"_id": oid}, {"$set": {"snapshot": snap}})
+    return {"ok": True, "id": reading_id, "voided": bool(snap.get("voided"))}
 
 
 @app.post("/api/client/setpoints")

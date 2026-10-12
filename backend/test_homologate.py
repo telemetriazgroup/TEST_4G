@@ -1,6 +1,15 @@
 """Criterios de aceptación de datos_homologar.md (sin Mongo / HTTP)."""
 
-from homologate import build_standard, classify_frame, date_key, hour_key, split_json_objects
+from homologate import (
+    build_standard,
+    classify_frame,
+    date_key,
+    fecha_export,
+    fecha_from_hour,
+    hour_key,
+    mongo_import_doc,
+    split_json_objects,
+)
 
 SAMPLE_CONCAT = (
     '{"i":"POLLO_BEBE","d01":"1B0204000082A700F600FE7FEB00FB00F200EA00FF7FEF00EF00F000F000F0004300'
@@ -80,10 +89,21 @@ def test_hour_key_lima():
     assert date_key("2026-09-09T15:26:41.752381Z") == "2026-09-09"
 
 
+def test_fecha_export_keeps_lima_clock():
+    assert fecha_export("2026-10-06T18:12:22.970555Z") == "2026-10-06T13:12:22.970Z"
+    assert fecha_from_hour("2026-10-16 01:00") == "2026-10-16T01:00:00.000Z"
+    doc = mongo_import_doc({"i": "POLLO_BEBE", "d01": "UNIT111", "d02": "AA", "d03": "BB"}, "2026-10-16T01:44:46.000Z")
+    assert doc["estado"] == 1
+    assert doc["fecha"] == {"$date": "2026-10-16T01:44:46.000Z"}
+    assert doc["d08"] is None
+    assert doc["d1"] is None
+
+
 if __name__ == "__main__":
     test_split_concat_does_not_post_rs()
     test_forma_a_standard_payload()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
     test_hour_key_lima()
+    test_fecha_export_keeps_lima_clock()
     print("ok")

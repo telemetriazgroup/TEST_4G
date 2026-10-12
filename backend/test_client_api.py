@@ -101,6 +101,16 @@ def test_zero_supply_return_humidity_dropped():
     assert zones["usda2_c"] is None
     assert zones["usda3_c"] == 5
     assert zones["usda4_c"] == 28.2
+    voided = build_series(
+        [{
+            "kind": "info",
+            "ts": "t4",
+            "snapshot": {"voided": True, "supply_air_c": 40, "return_air_c": 40, "humidity_pct": 50, "usda1_c": 35},
+        }],
+        1,
+    )["points"][0]
+    assert voided["supply_air_c"] is None
+    assert voided["usda1_c"] is None
 
 
 if __name__ == "__main__":

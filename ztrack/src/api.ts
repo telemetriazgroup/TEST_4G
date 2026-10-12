@@ -27,6 +27,7 @@ export type LiveSnapshot = {
 };
 
 export type SeriesPoint = {
+  id?: string | null;
   ts: string;
   supply_air_c: number | null;
   return_air_c: number | null;
@@ -232,6 +233,40 @@ export async function deleteProgram(id: string) {
   const r = await fetch(`${API}/api/reglas/programas/${encodeURIComponent(id)}`, { method: "DELETE" });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.detail || "No se pudo borrar la regla");
+  return data;
+}
+
+export type ReadingRow = {
+  id: string;
+  ts: string;
+  voided: boolean;
+  supply_air_c: number | null;
+  return_air_c: number | null;
+  setpoint_c: number | null;
+  humidity_pct: number | null;
+  co2_pct: number | null;
+  usda1_c: number | null;
+  usda2_c: number | null;
+  usda3_c: number | null;
+  usda4_c: number | null;
+};
+
+export async function fetchReadings(ident: string, start: string, end: string, skip = 0, limit = 80) {
+  const p = new URLSearchParams({ ident, start, end, skip: String(skip), limit: String(limit) });
+  const r = await fetch(`${API}/api/client/readings?${p}`);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudieron leer las lecturas");
+  return data as { total: number; skip: number; limit: number; items: ReadingRow[] };
+}
+
+export async function saveReading(id: string, body: { fields?: Record<string, number | null>; void?: boolean; restore?: boolean }) {
+  const r = await fetch(`${API}/api/client/readings/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || "No se pudo guardar la lectura");
   return data;
 }
 

@@ -333,6 +333,7 @@
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
+    btnExportErrors: document.getElementById("btnExportErrors"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
     statusKpis: document.getElementById("statusKpis"),
@@ -1606,6 +1607,33 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
+  if (els.btnExportErrors) {
+    els.btnExportErrors.addEventListener("click", async () => {
+      const btn = els.btnExportErrors;
+      const prev = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Preparando archivo…";
+      try {
+        const r = await fetch(`${API}/api/homologate/errors/export`);
+        if (!r.ok) throw new Error("No se pudo armar el archivo");
+        const blob = await r.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "errores_mongodb.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+        btn.textContent = "Descargado";
+      } catch (e) {
+        btn.textContent = "Error al descargar";
+        if (els.sentMeta) els.sentMeta.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+        setTimeout(() => {
+          btn.textContent = prev;
+        }, 2500);
+      }
+    });
+  }
   if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
   if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
   if (els.sentSource) els.sentSource.addEventListener("change", loadSent);

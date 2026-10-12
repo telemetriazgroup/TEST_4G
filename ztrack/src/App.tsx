@@ -11,6 +11,7 @@ import Reglas from './screens/Reglas'
 import Perfil from './screens/Perfil'
 import Usuarios from './screens/Usuarios'
 import Historial from './screens/Historial'
+import Corregir from './screens/Corregir'
 import { fetchLive, type LiveSnapshot, type Session } from './api'
 
 const SESSION_KEY = 'ztrack_client_session'
@@ -37,7 +38,7 @@ function clearStoredSession() {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Route = 'principal' | 'avisos' | 'historico' | 'historial' | 'comandos' | 'reles' | 'reglas' | 'usuarios' | 'perfil' | 'configuracion' | 'administracion'
+type Route = 'principal' | 'avisos' | 'historico' | 'corregir' | 'historial' | 'comandos' | 'reles' | 'reglas' | 'usuarios' | 'perfil' | 'configuracion' | 'administracion'
 
 const HIDDEN_ALARMS = 'ztrack_hidden_alarms'
 type Dark = boolean | null // true = dark, false = light, null = system
@@ -168,6 +169,7 @@ const NAV: NavItem[] = [
   { id: 'principal',     label: 'Panel',          short: 'Panel',     Icon: IcHome },
   { id: 'avisos',        label: 'Alarmas',        short: 'Alarmas',   Icon: IcBell },
   { id: 'historico',     label: 'Histórico',      short: 'Histórico', Icon: IcHistory },
+  { id: 'corregir',      label: 'Corregir',       short: 'Corregir',  Icon: IcSettings },
   { id: 'comandos',      label: 'Comandos',       short: 'Comandos',  Icon: IcCmd },
   { id: 'reles',         label: 'Relés',          short: 'Relés',     Icon: IcCmd },
   { id: 'reglas',        label: 'Reglas',         short: 'Reglas',    Icon: IcSettings },
@@ -238,7 +240,7 @@ export default function App() {
   }, [authenticated, loadLive])
 
   useEffect(() => {
-    if (!isAdmin && (route === 'administracion' || route === 'configuracion' || route === 'comandos' || route === 'reles' || route === 'reglas')) {
+    if (!isAdmin && (route === 'administracion' || route === 'configuracion' || route === 'comandos' || route === 'reles' || route === 'reglas' || route === 'corregir')) {
       setRoute('principal')
     }
   }, [route, isAdmin])
@@ -263,7 +265,7 @@ export default function App() {
   const themeLabel = dark === true ? 'Oscuro' : dark === false ? 'Claro' : 'Sistema'
 
   const navItems = NAV.filter((n) => {
-    if (n.id === 'comandos' || n.id === 'reles' || n.id === 'reglas' || n.id === 'configuracion') return isAdmin
+    if (n.id === 'comandos' || n.id === 'reles' || n.id === 'reglas' || n.id === 'configuracion' || n.id === 'corregir') return isAdmin
     return true
   })
 
@@ -273,6 +275,7 @@ export default function App() {
     configuracion:  <Configuracion live={live} />,
     administracion: <Administracion />,
     historico:      <Historico ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
+    corregir:       <Corregir ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,
     comandos:       <Comandos live={live} username={session?.username || ''} />,
     reles:          <Reles live={live} username={session?.username || ''} />,
     historial:      <Historial ident={live?.ident || session?.ident || 'POLLO_BEBE'} />,

@@ -184,9 +184,11 @@ def build_series(rows: list[dict[str, Any]], hours: int = 6) -> dict[str, Any]:
         snap = row.get("snapshot") or {}
         if row.get("kind") != "info":
             continue
-        if bad_info_frame(snap):
+        point_id = str(row["_id"]) if row.get("_id") is not None else None
+        if snap.get("voided") or bad_info_frame(snap):
             points.append(
                 {
+                    "id": point_id,
                     "ts": row.get("ts"),
                     "supply_air_c": None,
                     "return_air_c": None,
@@ -202,6 +204,7 @@ def build_series(rows: list[dict[str, Any]], hours: int = 6) -> dict[str, Any]:
             continue
         points.append(
             {
+                "id": point_id,
                 "ts": row.get("ts"),
                 "supply_air_c": _positive(snap.get("supply_air_c")),
                 "return_air_c": _positive(snap.get("return_air_c")),
