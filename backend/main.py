@@ -31,6 +31,7 @@ import client_api as capi
 import comandos as cmdb
 import decode_rs
 import decode_tk
+import history_nav as hnav
 import homologate as homo
 import reglas as regl
 
@@ -193,24 +194,22 @@ def _history_query(
     addr: str | None = None,
     ip: str | None = None,
     date: str | None = None,
+    hour: str | None = None,
+    direction: str | None = None,
+    value_type: str | None = None,
 ) -> dict[str, Any]:
-    q: dict[str, Any] = {}
-    if session_id:
-        q["session_id"] = session_id
-    elif addr:
-        q["addr"] = addr
-    elif ip:
-        q["ip"] = ip
-    if date:
-        if len(date) != 10 or date[4] != "-" or date[7] != "-":
-            raise HTTPException(400, "date debe ser YYYY-MM-DD")
-        try:
-            nxt = (datetime.fromisoformat(date) + timedelta(days=1)).date().isoformat()
-        except ValueError as e:
-            raise HTTPException(400, "date debe ser YYYY-MM-DD") from e
-        # Misma clave que /api/history/days (prefijo del ts), sin correr la hora.
-        q["ts"] = {"$gte": date, "$lt": nxt}
-    return q
+    try:
+        return hnav.history_query(
+            session_id=session_id,
+            addr=addr,
+            ip=ip,
+            date=date,
+            hour=hour,
+            direction=direction,
+            value_type=value_type,
+        )
+    except ValueError as e:
+        raise HTTPException(400, "fecha u hora inválida") from e
 
 
 def _jsonable(doc: dict[str, Any]) -> dict[str, Any]:
@@ -305,6 +304,9 @@ async def startup() -> None:
     await db.messages.create_index([("addr", 1), ("ts", -1)])
     await db.messages.create_index([("session_id", 1), ("ts", -1)])
     await db.messages.create_index([("direction", 1), ("ts", -1)])
+    await db.messages.create_index([("day", 1), ("hour", 1), ("ts", 1)])
+    await db.messages.create_index([("ip", 1), ("day", 1), ("ts", 1)])
+    await db.messages.create_index([("ip", 1), ("hour", 1), ("ts", 1)])
     await db.devices.create_index("addr", unique=True)
     await db.devices.create_index("ip")
     await db.sessions.create_index([("ip", 1), ("started_at", -1)])
@@ -337,6 +339,7 @@ async def startup() -> None:
     asyncio.create_task(_seguimiento_worker())
     asyncio.create_task(_backfill_seguimiento())
     asyncio.create_task(_comandos_janitor())
+    asyncio.create_task(_backfill_message_calendar())
 
 
 @app.on_event("shutdown")
@@ -449,6 +452,7 @@ async def internal_telemetry(body: TelemetryBody):
         "tcp_header": _sanitize_for_mongo(body.tcp_header) if body.tcp_header else None,
         "encoding": body.encoding,
         "ts": now,
+        **hnav.calendar_fields(now),
     }
     try:
         inserted = await db.messages.insert_one(doc)
@@ -1156,7 +1160,13 @@ async def _scan_candidates(
     scan_date = date
     if hour and not scan_date and len(hour) >= 10:
         scan_date = hour[:10]
-    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=scan_date)
+    q = _history_query(
+        session_id=session_id,
+        addr=addr,
+        ip=ip,
+        date=None if hour else scan_date,
+        hour=hour,
+    )
     q["direction"] = "rx"
     q["value_type"] = {"$ne": "tcp_header"}
     limit = max(1, min(limit, 10000))
@@ -1396,16 +1406,34 @@ async def homologate_status(limit: int = 20):
     }
 
 
+def _sent_in_window(ts: str | None, date_from: str | None, date_to: str | None) -> bool:
+    window = hnav.sent_ts_query(date_from, date_to).get("ts")
+    if not window:
+        return True
+    if not ts:
+        return False
+    if window.get("$gte") and ts < window["$gte"]:
+        return False
+    if window.get("$lt") and ts >= window["$lt"]:
+        return False
+    return True
+
+
 @app.get("/api/homologate/sent")
 async def homologate_sent(
     status: str | None = None,
     source: str | None = None,
     date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     hour: str | None = None,
     ident: str | None = None,
-    limit: int = 500,
+    limit: int = hnav.PAGE,
+    skip: int = 0,
 ):
-    """Consulta tramas estándar enviadas (vivo + histórico) y su resultado POST."""
+    """Últimas 100 tramas enviadas, o un rango de fechas, de 100 en 100."""
+    if date and not date_from and not date_to:
+        date_from = date_to = date
     q: dict[str, Any] = {}
     if status and status != "all":
         q["status"] = status
@@ -1415,14 +1443,19 @@ async def homologate_sent(
         q["i"] = ident
     if hour:
         q["hour"] = hour
-    elif date:
-        q["hour"] = {"$regex": f"^{date}"}
-    limit = max(1, min(limit, 2000))
-    cursor = db.homologate_log.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
+    try:
+        q.update(hnav.sent_ts_query(date_from, date_to))
+    except ValueError as e:
+        raise HTTPException(400, "fecha inválida") from e
+    limit, skip = hnav.clamp_page(limit, skip)
+    total = await db.homologate_log.count_documents(q)
+    cursor = db.homologate_log.find(q, {"_id": 0}).sort("ts", -1).skip(skip).limit(limit)
     rows = await cursor.to_list(limit)
     pending = []
     for item in list(_queue):
-        if item.get("status") not in {"queued", "sending"}:
+        if skip or item.get("status") not in {"queued", "sending"}:
+            continue
+        if not _sent_in_window(item.get("enqueued_at"), date_from, date_to):
             continue
         pending.append(
             {
@@ -1445,12 +1478,17 @@ async def homologate_sent(
     return {
         "items": pending + rows,
         "count": len(pending) + len(rows),
+        "total": total,
+        "skip": skip,
+        "limit": limit,
         "pending": len(pending),
         "ok": ok,
         "errors": err,
         "configured": bool(homo.env_url()),
         "host": homo.destination_host(),
         "queue": _queue_snapshot(),
+        "date_from": date_from,
+        "date_to": date_to,
     }
 
 
@@ -2545,42 +2583,154 @@ async def get_messages(
     return {"messages": rows, "count": len(rows)}
 
 
-@app.get("/api/history/days")
-async def get_history_days(
-    addr: str | None = None,
-    ip: str | None = None,
-    session_id: str | None = None,
-    limit: int = 365,
-):
-    """Lista días con tramas guardadas (más recientes primero)."""
-    q = _history_query(session_id=session_id, addr=addr, ip=ip)
-    limit = max(1, min(limit, 1000))
-    pipeline: list[dict[str, Any]] = [
-        {"$match": q},
-        {
-            "$project": {
-                "date": {"$substr": ["$ts", 0, 10]},
-                "direction": 1,
-            }
-        },
+def _count_pipeline(match: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    return [
+        {"$match": match},
         {
             "$group": {
-                "_id": "$date",
+                "_id": f"${key}",
                 "count": {"$sum": 1},
                 "rx": {"$sum": {"$cond": [{"$eq": ["$direction", "rx"]}, 1, 0]}},
                 "tx": {"$sum": {"$cond": [{"$eq": ["$direction", "tx"]}, 1, 0]}},
             }
         },
-        {"$sort": {"_id": -1}},
-        {"$limit": limit},
     ]
+
+
+async def _backfill_message_calendar() -> None:
+    """Escribe day/hour en Lima para tramas viejas, que el archivo pueda indexarlas."""
+    from pymongo import UpdateOne
+
+    while True:
+        rows = await db.messages.find(
+            {"day": {"$exists": False}},
+            {"_id": 1, "ts": 1},
+        ).limit(400).to_list(400)
+        if not rows:
+            return
+        ops = [
+            UpdateOne({"_id": row["_id"]}, {"$set": hnav.calendar_fields(row.get("ts"))})
+            for row in rows
+        ]
+        await db.messages.bulk_write(ops, ordered=False)
+
+
+async def _latest_message_day(match: dict[str, Any]) -> str | None:
+    rows = await db.messages.find(match, {"ts": 1, "day": 1}).sort("ts", -1).limit(1).to_list(1)
+    if not rows:
+        return None
+    day = rows[0].get("day") or hnav.calendar_fields(rows[0].get("ts")).get("day")
+    if not day or day == "desconocida":
+        return None
+    return day
+
+
+@app.get("/api/history/days")
+async def get_history_days(
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    direction: str | None = None,
+    value_type: str | None = None,
+    limit: int = 400,
+):
+    """Cuenta tramas por día en Lima. No devuelve las tramas."""
+    q = _history_query(
+        session_id=session_id,
+        addr=addr,
+        ip=ip,
+        direction=direction,
+        value_type=value_type,
+    )
+    q["day"] = {"$gte": "2000-01-01", "$lte": "2999-12-31"}
+    limit = max(1, min(limit, 1000))
+    pipeline = _count_pipeline(q, "day") + [{"$sort": {"_id": -1}}, {"$limit": limit}]
     rows = await db.messages.aggregate(pipeline).to_list(limit)
     days = [
         {"date": r["_id"], "count": r["count"], "rx": r["rx"], "tx": r["tx"]}
         for r in rows
         if r.get("_id")
     ]
-    return {"days": days, "count": len(days)}
+    fallback = False
+    if not days:
+        scope = _history_query(session_id=session_id, addr=addr, ip=ip)
+        last_day = await _latest_message_day(scope)
+        if last_day:
+            one = _history_query(
+                session_id=session_id,
+                addr=addr,
+                ip=ip,
+                date=last_day,
+                direction=direction,
+                value_type=value_type,
+            )
+            counted = await db.messages.aggregate(_count_pipeline(one, "day")).to_list(1)
+            count = counted[0]["count"] if counted else await db.messages.count_documents(one)
+            rx = counted[0]["rx"] if counted else 0
+            tx = counted[0]["tx"] if counted else 0
+            days = [{"date": last_day, "count": count, "rx": rx, "tx": tx}]
+            fallback = True
+    today = hnav.lima_today()
+    return {
+        "days": days,
+        "count": len(days),
+        "today": today,
+        "stale": bool(days) and days[0]["date"] != today,
+        "fallback": fallback,
+    }
+
+
+@app.get("/api/history/hours")
+async def get_history_hours(
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    date: str | None = None,
+    direction: str | None = None,
+    value_type: str | None = None,
+    limit: int = 72,
+):
+    """Cuenta tramas por hora. Sin fecha, las horas recientes; si no hay, el último día."""
+    base = _history_query(
+        session_id=session_id,
+        addr=addr,
+        ip=ip,
+        direction=direction,
+        value_type=value_type,
+    )
+    limit = max(1, min(limit, 240))
+    fallback_day = None
+    if date:
+        match = {**base, **_history_query(date=date)}
+        sort_dir = 1
+    else:
+        match = {**base, "hour": {"$gte": hnav.recent_hour_cutoff(), "$nin": ["", "desconocida"]}}
+        sort_dir = -1
+    pipeline = _count_pipeline(match, "hour") + [{"$sort": {"_id": sort_dir}}, {"$limit": limit}]
+    rows = await db.messages.aggregate(pipeline).to_list(limit)
+    if not rows and not date:
+        scope = _history_query(session_id=session_id, addr=addr, ip=ip)
+        fallback_day = await _latest_message_day(scope)
+        if fallback_day:
+            match = {**base, **_history_query(date=fallback_day)}
+            pipeline = _count_pipeline(match, "hour") + [{"$sort": {"_id": 1}}, {"$limit": limit}]
+            rows = await db.messages.aggregate(pipeline).to_list(limit)
+    hours = [
+        {"hour": r["_id"], "count": r["count"], "rx": r["rx"], "tx": r["tx"]}
+        for r in rows
+        if r.get("_id") and r["_id"] != "desconocida"
+    ]
+    today = hnav.lima_today()
+    newest = hours[0]["hour"][:10] if hours and sort_dir < 0 else (fallback_day or (date or ""))
+    stale = bool(newest) and newest != today
+    return {
+        "hours": hours,
+        "count": len(hours),
+        "date": date,
+        "fallback_day": fallback_day,
+        "today": today,
+        "stale": stale,
+    }
 
 
 @app.get("/api/history")
@@ -2589,22 +2739,45 @@ async def get_history(
     ip: str | None = None,
     session_id: str | None = None,
     date: str | None = None,
-    limit: int = 500,
+    hour: str | None = None,
+    direction: str | None = None,
+    value_type: str | None = None,
+    order: str = "asc",
+    limit: int = hnav.PAGE,
     skip: int = 0,
 ):
-    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
-    max_limit = 20000 if date else 5000
-    limit = max(1, min(limit, max_limit))
-    skip = max(0, skip)
+    """Una página de 100 tramas. Sin hora, no descarga el día entero."""
+    limit, skip = hnav.clamp_page(limit, skip)
+    q = _history_query(
+        session_id=session_id,
+        addr=addr,
+        ip=ip,
+        date=date,
+        hour=hour,
+        direction=direction,
+        value_type=value_type,
+    )
+    descending = (order or "asc").lower() == "desc" or (not date and not hour)
     total = await db.messages.count_documents(q)
-    cursor = db.messages.find(q, {"_id": 0}).sort("ts", -1).skip(skip).limit(limit)
+    cursor = (
+        db.messages.find(q, {"_id": 0, "tcp_header": 0})
+        .sort("ts", -1 if descending else 1)
+        .skip(skip)
+        .limit(limit)
+    )
     rows = await cursor.to_list(limit)
+    if descending:
+        rows.reverse()
+    pages = (total + limit - 1) // limit if total else 0
     return {
         "messages": rows,
         "total": total,
         "skip": skip,
         "limit": limit,
+        "pages": pages,
         "date": date,
+        "hour": hour,
+        "order": "desc" if descending else "asc",
     }
 
 

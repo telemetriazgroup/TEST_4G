@@ -223,7 +223,7 @@
       </div>
 
       <div id="historyHours" class="hours-wrap"></div>
-      <p id="emptyHistory" class="empty show">Sin histórico. Las tramas se agrupan por hora (YYYY-MM-DD HH:00).</p>
+      <p id="emptyHistory" class="empty show">Sin histórico. Cada hora muestra su cantidad; al abrirla se cargan 100 tramas.</p>
       <p id="historyMeta" class="hint">—</p>
     </section>
 
@@ -271,7 +271,7 @@
         </aside>
         <div class="archive-content">
           <div id="archiveHours" class="hours-wrap"></div>
-          <p id="emptyArchive" class="empty show">Elige un día para ver todas las tramas guardadas.</p>
+          <p id="emptyArchive" class="empty show">Elige un día. Verás la cantidad por hora y, al abrir una hora, 100 tramas.</p>
           <p id="archiveMeta" class="hint">Los datos no se borran — quedan en MongoDB.</p>
         </div>
       </div>
@@ -294,6 +294,10 @@
             <option value="live">Solo en vivo</option>
             <option value="queue">Solo histórico (cola)</option>
           </select>
+          <input type="date" id="sentFrom" aria-label="Desde" />
+          <input type="date" id="sentTo" aria-label="Hasta" />
+          <button type="button" id="btnSentPrev" class="btn ghost">◀ 100</button>
+          <button type="button" id="btnSentNext" class="btn ghost">100 ▶</button>
         </div>
         <button type="button" id="btnExportErrors" class="btn ghost">Descargar errores</button>
         <button type="button" id="btnRefreshSent" class="btn primary">Actualizar</button>
