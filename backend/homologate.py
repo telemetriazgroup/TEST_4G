@@ -285,8 +285,17 @@ def _ascii_digits(hex_pairs: str) -> str | None:
     return text
 
 
+_TK_OP_RE = re.compile(r"82a7[0-9a-f]{2}|8219[0-9a-f]{2}|0202|0203|0208")
+
+
+def tk_reply_opcode(payload: str | None) -> str | None:
+    """Código de respuesta dentro de la trama: 82a700, 82a706, 821931, 0202…"""
+    match = _TK_OP_RE.search(str(payload or "").lower())
+    return match.group(0) if match else None
+
+
 def parse_tk_rx(hex_str: str | None) -> dict[str, Any] | None:
-    """IMEI en ASCII-hex, separador ffffffff, y el bloque 82A700 (d02) o 82A701 (d03)."""
+    """IMEI en ASCII-hex, separador ffffffff, y el bloque de respuesta del controlador."""
     blob = re.sub(r"[^0-9a-fA-F]", "", str(hex_str or "")).lower()
     if not blob:
         return None
@@ -295,11 +304,7 @@ def parse_tk_rx(hex_str: str | None) -> dict[str, Any] | None:
     if idx >= 0 and idx % 2 == 0:
         imei = _ascii_digits(blob[:idx])
         payload = blob[idx + len(marker) :]
-        opcode = None
-        if "82a700" in payload:
-            opcode = "82a700"
-        elif "82a701" in payload:
-            opcode = "82a701"
+        opcode = tk_reply_opcode(payload)
         if imei or payload:
             return {"imei": imei, "payload": payload, "opcode": opcode}
     imei = _ascii_digits(blob)

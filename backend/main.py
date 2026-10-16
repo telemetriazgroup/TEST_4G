@@ -29,6 +29,8 @@ import client_api as capi
 import comandos as cmdb
 import decode_rs
 import decode_tk
+import tk_analysis
+import tk_probe
 import homologate as homo
 import reglas as regl
 
@@ -37,6 +39,8 @@ MONGO_DB = os.getenv("MONGO_DB", "test_4g_9915")
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://tcp_bridge:8086").rstrip("/")
 _tk_tasks: dict[str, asyncio.Task] = {}
 _tk_inbox: dict[str, asyncio.Queue] = {}
+_tk_hold: set[str] = set()
+_tk_locks: dict[str, asyncio.Lock] = {}
 
 app = FastAPI(title="TEST_4G Backend", version="1.1.0")
 app.add_middleware(
@@ -108,6 +112,17 @@ class ConnectBody(BaseModel):
 class RelayLabelsBody(BaseModel):
     ident: str
     names: dict[str, str] = Field(default_factory=dict)
+
+
+class ProbeBody(BaseModel):
+    imei: str | None = None
+    addr: str | None = None
+    commands: list[str] = Field(default_factory=list)
+
+
+class DecodeBody(BaseModel):
+    hex: str = ""
+    query: str | None = None
 
 
 class ComandoBody(BaseModel):
@@ -681,20 +696,34 @@ async def _tk_one_cycle(addr: str, ip: str, session_id: str | None, known_imei: 
     return "ok" if http_status else "error"
 
 
+def _tk_lock(addr: str) -> asyncio.Lock:
+    lock = _tk_locks.get(addr)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tk_locks[addr] = lock
+    return lock
+
+
 async def _tk_poll_loop(addr: str, ip: str, session_id: str | None) -> None:
     try:
         while True:
             dev = await db.devices.find_one({"addr": addr}, {"is_connected": 1, "imei": 1, "session_id": 1, "ip": 1})
             if not dev or not dev.get("is_connected"):
                 return
+            if not tk_probe.autosend_allowed(addr in _tk_hold):
+                await asyncio.sleep(0.4)
+                continue
             cycle = time.monotonic()
             try:
-                result = await _tk_one_cycle(
-                    addr,
-                    dev.get("ip") or ip,
-                    dev.get("session_id") or session_id,
-                    dev.get("imei"),
-                )
+                async with _tk_lock(addr):
+                    if not tk_probe.autosend_allowed(addr in _tk_hold):
+                        continue
+                    result = await _tk_one_cycle(
+                        addr,
+                        dev.get("ip") or ip,
+                        dev.get("session_id") or session_id,
+                        dev.get("imei"),
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2124,6 +2153,65 @@ async def homologate_queue_clear():
             {"$set": {"status": "cancelled", "cancelled_at": _now()}},
         )
     return {"ok": True, "removed": removed, "queue": _queue_snapshot()}
+
+
+@app.get("/api/tk/catalog")
+async def tk_catalog():
+    return {"commands": tk_analysis.catalog()}
+
+
+@app.get("/api/tk/targets")
+async def tk_targets():
+    cursor = db.devices.find(
+        {"$or": [{"imei": {"$nin": [None, ""]}}, {"is_connected": True}]},
+        {"_id": 0, "addr": 1, "ip": 1, "imei": 1, "session_id": 1, "is_connected": 1},
+    ).sort("last_seen", -1)
+    rows = await cursor.to_list(200)
+    for row in rows:
+        row["paused"] = row.get("addr") in _tk_hold
+    return {"devices": rows}
+
+
+@app.post("/api/tk/probe")
+async def tk_probe_run(body: ProbeBody):
+    imei = (body.imei or "").strip()
+    addr = (body.addr or "").strip()
+    if not body.commands:
+        raise HTTPException(400, "elige al menos un comando")
+    query: dict[str, Any] = {"addr": addr} if addr else {"imei": imei}
+    if not addr and not imei:
+        raise HTTPException(400, "elige un equipo por IMEI")
+    dev = await db.devices.find_one(query, {"_id": 0})
+    if not dev or not dev.get("is_connected"):
+        raise HTTPException(409, "el equipo no está conectado")
+    if imei and dev.get("imei") and dev.get("imei") != imei:
+        raise HTTPException(409, "el IMEI no coincide con la sesión")
+    target = dev["addr"]
+    _tk_hold.add(target)
+    try:
+        async with _tk_lock(target):
+            results = await tk_probe.run_probe(
+                body.commands,
+                lambda hx: _tk_send_hex(target, dev.get("ip") or "", hx),
+                lambda expect, sent_at, timeout: _tk_wait_opcode(target, expect, sent_at, timeout),
+            )
+    finally:
+        _tk_hold.discard(target)
+    return {
+        "ok": True,
+        "imei": dev.get("imei") or imei or None,
+        "session_id": dev.get("session_id"),
+        "addr": target,
+        "paused_during": True,
+        "results": results,
+    }
+
+
+@app.post("/api/tk/decode")
+async def tk_decode(body: DecodeBody):
+    if not (body.hex or "").strip():
+        raise HTTPException(400, "pega una trama")
+    return tk_analysis.decode_pasted(body.hex, body.query)
 
 
 @app.get("/api/devices")

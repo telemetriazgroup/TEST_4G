@@ -585,8 +585,8 @@
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
       if (activeTab === "status") loadSeguimiento();
-      if (activeTab === "cmd") loadComandos();
-      if (activeTab === "reglas") loadReglas();
+      if (activeTab === "cmd") loadProbeTargets();
+      if (activeTab === "reglas") loadDecodeCatalog();
     });
   });
 
@@ -1299,9 +1299,26 @@
   // ---- Devices ----
   async function loadDevices() {
     try {
-      const r = await fetch(`${API}/api/devices`);
+      const [r, tk] = await Promise.all([
+        fetch(`${API}/api/devices`),
+        fetch(`${API}/api/tk/targets`).catch(() => null),
+      ]);
       const data = await r.json();
-      renderDevices(data.devices || []);
+      const known = tk ? ((await tk.json()).devices || []) : [];
+      const byAddr = {};
+      known.forEach((d) => {
+        if (d.addr) byAddr[d.addr] = d;
+      });
+      const devices = (data.devices || []).map((d) => {
+        const extra = byAddr[d.addr] || {};
+        return {
+          ...d,
+          imei: d.imei || extra.imei || null,
+          session_id: d.session_id || extra.session_id || null,
+        };
+      });
+      renderDevices(devices);
+      if (activeTab === "cmd") loadProbeTargets();
     } catch (e) {
       console.warn(e);
     }
@@ -1323,9 +1340,11 @@
       li.dataset.addr = d.addr;
       if (selected && selected.addr === d.addr) li.classList.add("active");
       const { ip, port } = parseAddr(d.addr);
+      const title = d.imei || ip || d.ip || d.addr;
+      const where = d.imei ? `${ip || d.ip || ""}:${port ?? "—"}` : `puerto ${port ?? "—"}`;
       li.innerHTML =
-        `<div class="ip">${esc(ip || d.ip || d.addr)}</div>` +
-        `<div class="meta">puerto ${esc(port ?? "—")} · idle ${esc(d.idle_s ?? "—")}s` +
+        `<div class="ip">${esc(title)}</div>` +
+        `<div class="meta">${esc(where)}` +
         (d.session_id ? ` · ses ${esc(String(d.session_id).slice(0, 8))}` : "") +
         `</div>`;
       li.addEventListener("click", () => selectDevice(d));
@@ -1347,6 +1366,7 @@
         ip: d.ip || ip,
         port,
         session_id: d.session_id || null,
+        imei: d.imei || null,
       };
     }
     els.serialTitle.textContent = selected
@@ -1368,13 +1388,11 @@
     }
     if (els.cmdTitle) {
       els.cmdTitle.textContent = selected
-        ? `Comandos · ${selected.ip}:${selected.port}`
-        : "Comandos";
+        ? `Procesamiento · ${selected.ip}:${selected.port}`
+        : "Procesamiento";
     }
     if (els.reglasTitle) {
-      els.reglasTitle.textContent = selected
-        ? `Reglas · ${selected.ip}:${selected.port}`
-        : "Reglas";
+      els.reglasTitle.textContent = "Decodificar";
     }
 
     [...els.deviceList.children].forEach((li, i) => {
@@ -1387,8 +1405,8 @@
     if (activeTab === "archive") await loadArchiveTab();
     if (activeTab === "sent") await loadSent();
     if (activeTab === "status") await loadSeguimiento();
-    if (activeTab === "cmd") await loadComandos();
-    if (activeTab === "reglas") await loadReglas();
+    if (activeTab === "cmd") await loadProbeTargets();
+    if (activeTab === "reglas") await loadDecodeCatalog();
   }
 
   // ---- WS ----
@@ -1409,9 +1427,8 @@
         if (msg.type === "seguimiento" && activeTab === "status") {
           if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
         }
-        if (msg.type === "comando" && (activeTab === "cmd" || activeTab === "reglas")) {
-          if (activeTab === "cmd") loadComandos();
-          if (activeTab === "reglas") loadReglas();
+        if (msg.type === "connect" || msg.type === "disconnect") {
+          if (activeTab === "cmd") loadProbeTargets();
         }
         if (
           msg.type === "connect" ||
@@ -2065,8 +2082,6 @@
         : `Referencia guardada (${st}). No se envía: no hay sesión. Se cancela a las 2 h.`;
       if (els.cmdMeta) els.cmdMeta.textContent = note;
       if (els.reglasMeta) els.reglasMeta.textContent = note;
-      if (activeTab === "cmd") loadComandos();
-      if (activeTab === "reglas") loadReglas();
     } catch (e) {
       alert(String(e));
     }
@@ -2079,8 +2094,6 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ queue_id: queueId }),
       });
-      if (activeTab === "cmd") loadComandos();
-      if (activeTab === "reglas") loadReglas();
     } catch (e) {
       alert(String(e));
     }
@@ -2584,6 +2597,164 @@
       els.message.placeholder = "Mensaje string…";
     }
   });
+
+  function probeCard(item) {
+    const fields = (item.fields || [])
+      .map((row) => `<tr><td>${esc(row.name)}</td><td>${esc(row.value)}</td></tr>`)
+      .join("");
+    const head = item.title || item.id || "Consulta";
+    const flag = item.ok === false
+      ? `<p class="bad">${esc(item.error || "sin respuesta")}</p>`
+      : "";
+    const crc = item.crc_ok === false ? `<p class="bad">CRC no cierra</p>` : "";
+    const imei = item.imei ? `<p class="hint">IMEI ${esc(item.imei)}</p>` : "";
+    return (
+      `<article class="probe-card"><h3>${esc(head)}</h3>${flag}${crc}${imei}` +
+      (fields ? `<table class="probe-fields">${fields}</table>` : "") +
+      `</article>`
+    );
+  }
+
+  async function loadDecodeCatalog() {
+    const sel = document.getElementById("decodeQuery");
+    const box = document.getElementById("probeChecks");
+    let commands = [];
+    try {
+      const r = await fetch(`${API}/api/tk/catalog`);
+      const data = await r.json();
+      commands = data.commands || [];
+    } catch (_) {
+      return;
+    }
+    if (sel && !sel.options.length) {
+      sel.innerHTML = `<option value="">Automático, según la respuesta</option>` +
+        commands.map((c) => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join("");
+    }
+    if (box && !box.childElementCount) {
+      box.innerHTML = commands.map((c) =>
+        `<label><input type="checkbox" value="${esc(c.id)}" checked /> ${esc(c.title)}</label>`
+      ).join("");
+    }
+  }
+
+  async function loadProbeTargets() {
+    await loadDecodeCatalog();
+    const sel = document.getElementById("probeDevice");
+    const session = document.getElementById("probeSession");
+    if (!sel) return;
+    const prev = sel.value;
+    let devices = [];
+    try {
+      const r = await fetch(`${API}/api/tk/targets`);
+      const data = await r.json();
+      devices = data.devices || [];
+    } catch (e) {
+      if (session) session.textContent = String(e);
+      return;
+    }
+    const known = devices.filter((d) => d.imei);
+    sel.innerHTML = known.length
+      ? known.map((d) => {
+          const label = `${d.imei} · ${d.is_connected ? "conectado" : "fuera"} · ${d.addr || ""}`;
+          return `<option value="${esc(d.addr || "")}" data-imei="${esc(d.imei || "")}" data-session="${esc(d.session_id || "")}">${esc(label)}</option>`;
+        }).join("")
+      : `<option value="">Ningún IMEI reconocido</option>`;
+    if (selected && selected.addr) sel.value = selected.addr;
+    else if (prev) sel.value = prev;
+    if (selected && selected.addr && sel.value !== selected.addr && session) {
+      session.textContent = `Sesión ${selected.session_id || "sin id"} · ${selected.addr} · el IMEI todavía no llegó.`;
+    }
+    const show = () => {
+      const opt = sel.selectedOptions[0];
+      if (!opt || !opt.value) {
+        if (session) session.textContent = "Cuando el equipo se identifique, el IMEI aparece aquí con su sesión.";
+        return;
+      }
+      if (session) {
+        session.textContent = `Sesión ${opt.dataset.session || "sin id"} · ${opt.value}`;
+      }
+    };
+    sel.onchange = show;
+    show();
+  }
+
+  async function runProbe() {
+    const sel = document.getElementById("probeDevice");
+    const out = document.getElementById("probeOut");
+    const hint = document.getElementById("probeHint");
+    const badge = document.getElementById("probePause");
+    const opt = sel && sel.selectedOptions[0];
+    const commands = [...document.querySelectorAll("#probeChecks input:checked")].map((n) => n.value);
+    if (!opt || !opt.value) {
+      if (hint) hint.textContent = "Elige un IMEI conectado.";
+      return;
+    }
+    if (!commands.length) {
+      if (hint) hint.textContent = "Elige al menos una consulta.";
+      return;
+    }
+    if (badge) badge.textContent = "ciclo en pausa";
+    if (hint) hint.textContent = "Consulta automática y POST suspendidos. Esperando respuestas…";
+    try {
+      const r = await fetch(`${API}/api/tk/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          addr: opt.value,
+          imei: opt.dataset.imei || "",
+          commands,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        if (hint) hint.textContent = data.detail || "no se pudo probar";
+        if (out) out.innerHTML = "";
+        return;
+      }
+      if (hint) {
+        hint.textContent = `Sesión ${data.session_id || "—"} · IMEI ${data.imei || "—"} · el ciclo volvió al terminar`;
+      }
+      if (out) out.innerHTML = (data.results || []).map(probeCard).join("");
+    } catch (e) {
+      if (hint) hint.textContent = String(e);
+    } finally {
+      if (badge) badge.textContent = "ciclo activo";
+    }
+  }
+
+  async function runDecode() {
+    const hex = (document.getElementById("decodeHex") || {}).value || "";
+    const query = (document.getElementById("decodeQuery") || {}).value || "";
+    const out = document.getElementById("decodeOut");
+    const hint = document.getElementById("decodeHint");
+    try {
+      const r = await fetch(`${API}/api/tk/decode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hex, query: query || null }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        if (hint) hint.textContent = data.detail || "no se pudo decodificar";
+        return;
+      }
+      if (hint) {
+        hint.textContent = data.imei
+          ? `IMEI ${data.imei} · ${data.opcode || ""}`
+          : (data.error || data.opcode || "listo");
+      }
+      if (out) out.innerHTML = probeCard(data);
+    } catch (e) {
+      if (hint) hint.textContent = String(e);
+    }
+  }
+
+  const btnProbeRefresh = document.getElementById("btnProbeRefresh");
+  const btnProbeRun = document.getElementById("btnProbeRun");
+  const btnDecode = document.getElementById("btnDecode");
+  if (btnProbeRefresh) btnProbeRefresh.addEventListener("click", loadProbeTargets);
+  if (btnProbeRun) btnProbeRun.addEventListener("click", runProbe);
+  if (btnDecode) btnDecode.addEventListener("click", runDecode);
 
   connectWs();
   loadDevices();
