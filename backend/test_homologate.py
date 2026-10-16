@@ -1,6 +1,14 @@
 """Criterios de aceptación de datos_homologar.md (sin Mongo / HTTP)."""
 
-from homologate import build_standard, classify_frame, date_key, hour_key, split_json_objects
+from homologate import (
+    build_standard,
+    build_tk_payload,
+    classify_frame,
+    date_key,
+    hour_key,
+    parse_tk_rx,
+    split_json_objects,
+)
 
 SAMPLE_CONCAT = (
     '{"i":"POLLO_BEBE","d01":"1B0204000082A700F600FE7FEB00FB00F200EA00FF7FEF00EF00F000F000F0004300'
@@ -75,6 +83,37 @@ def test_forma_b_does_not_map_alarm_to_d02():
     assert "82A700" not in classified["opcodes"]
 
 
+RX_D02 = (
+    "383639333837303635323735353438ffffffff"
+    "1b0204000082a700f4fefe7f0eff07ff0b01d501ff7ff000fe7ffe7ffe7ffe7ffe7ffe7ffe7ffe7f"
+    "b2013c00010001000000fe7ffe7f000000009c01feb1100048010000ef530100fe7ffe7ff4fe0eff"
+    "470c000004008800fe7fff7fb54b1b04ffff"
+)
+RX_D03 = (
+    "383639333837303635323735353438ffffffff"
+    "1b0204000082a70100003cf63000030100fe00fe7ffe7ffe7ffe7f0807060000ffffffff1d981b04ffff"
+)
+
+
+def test_tk_response_splits_imei_and_blocks():
+    d02 = parse_tk_rx(RX_D02)
+    d03 = parse_tk_rx(RX_D03)
+    assert d02["imei"] == "869387065275548"
+    assert d02["opcode"] == "82a700"
+    assert d02["payload"].startswith("1b0204000082a700")
+    assert d03["imei"] == "869387065275548"
+    assert d03["opcode"] == "82a701"
+    assert "ffffffff1d981b04ffff" in d03["payload"]
+    payload = build_tk_payload(d02["imei"], d02["payload"], d03["payload"])
+    assert payload == {
+        "i": "869387065275548",
+        "d01": "UNIT111",
+        "d02": d02["payload"],
+        "d03": d03["payload"],
+        "d08": "",
+    }
+
+
 def test_hour_key_lima():
     assert hour_key("2026-09-09T15:26:41.752381Z") == "2026-09-09 10:00"
     assert date_key("2026-09-09T15:26:41.752381Z") == "2026-09-09"
@@ -85,5 +124,6 @@ if __name__ == "__main__":
     test_forma_a_standard_payload()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
+    test_tk_response_splits_imei_and_blocks()
     test_hour_key_lima()
     print("ok")

@@ -35,6 +35,8 @@ import reglas as regl
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://mongo:27017")
 MONGO_DB = os.getenv("MONGO_DB", "test_4g_9915")
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://tcp_bridge:8086").rstrip("/")
+_tk_tasks: dict[str, asyncio.Task] = {}
+_tk_inbox: dict[str, asyncio.Queue] = {}
 
 app = FastAPI(title="TEST_4G Backend", version="1.1.0")
 app.add_middleware(
@@ -49,6 +51,11 @@ client: AsyncIOMotorClient | None = None
 db = None
 _ws_clients: set[WebSocket] = set()
 log = logging.getLogger("test_4g")
+log.setLevel(logging.INFO)
+if not log.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    log.addHandler(_handler)
 _queue_lock = asyncio.Lock()
 _queue: deque[dict[str, Any]] = deque()
 _queue_wake = asyncio.Event()
@@ -327,6 +334,7 @@ async def startup() -> None:
     await db.comandos.create_index([("enqueued_at", -1)])
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
+    asyncio.create_task(_tk_resume_connected())
     asyncio.create_task(_seguimiento_worker())
     asyncio.create_task(_backfill_seguimiento())
     asyncio.create_task(_comandos_janitor())
@@ -398,6 +406,7 @@ async def internal_connect(body: ConnectBody):
             "tcp_header": body.tcp_header,
         }
     )
+    _tk_start(body.addr, body.ip, session_id)
     return {"ok": True, "session_id": session_id}
 
 
@@ -412,6 +421,7 @@ async def internal_disconnect(body: dict):
         {"$set": {"is_connected": False, "disconnected_at": now}},
     )
     await close_session_by_addr(addr)
+    _tk_stop(addr)
     await broadcast({"type": "disconnect", "addr": addr, "ip": body.get("ip")})
     return {"ok": True}
 
@@ -466,6 +476,8 @@ async def internal_telemetry(body: TelemetryBody):
     asyncio.create_task(_homologate_after_persist(doc))
     _enqueue_seguimiento(doc)
     asyncio.create_task(_comandos_on_rx(doc))
+    if body.direction == "rx" and value_type != "tcp_header":
+        await _tk_note_rx(body.addr, body.hex or body.text or "", session_id)
 
     device_set: dict[str, Any] = {
         "ip": body.ip,
@@ -517,6 +529,219 @@ async def _recent_duplicate(payload_hash: str, session_id: str | None) -> bool:
         q["session_id"] = session_id
     found = await db.homologate_log.find_one(q, {"_id": 1})
     return found is not None
+
+
+def _tk_queue(addr: str) -> asyncio.Queue:
+    box = _tk_inbox.get(addr)
+    if box is None:
+        box = asyncio.Queue(maxsize=30)
+        _tk_inbox[addr] = box
+    return box
+
+
+def _tk_start(addr: str | None, ip: str | None, session_id: str | None) -> None:
+    if not addr:
+        return
+    running = _tk_tasks.get(addr)
+    if running and not running.done():
+        return
+    _tk_queue(addr)
+    _tk_tasks[addr] = asyncio.create_task(_tk_poll_loop(addr, ip or "", session_id))
+
+
+def _tk_stop(addr: str | None) -> None:
+    if not addr:
+        return
+    task = _tk_tasks.pop(addr, None)
+    if task and not task.done():
+        task.cancel()
+    _tk_inbox.pop(addr, None)
+
+
+async def _tk_note_rx(addr: str | None, raw: str, session_id: str | None) -> None:
+    parsed = homo.parse_tk_rx(raw)
+    if not parsed or not addr:
+        return
+    parsed["at"] = time.monotonic()
+    imei = parsed.get("imei")
+    if imei:
+        await db.devices.update_one({"addr": addr}, {"$set": {"imei": imei}})
+        if session_id:
+            await db.sessions.update_one({"session_id": session_id}, {"$set": {"imei": imei}})
+    box = _tk_inbox.get(addr)
+    if not box:
+        return
+    if box.full():
+        try:
+            box.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    box.put_nowait(parsed)
+
+
+async def _tk_send_hex(addr: str, ip: str, message: str) -> bool:
+    payload: dict[str, Any] = {"message": message, "encoding": "hex", "addr": addr}
+    if ip:
+        payload["ip"] = ip
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            r = await http.post(f"{BRIDGE_URL}/send", json=payload)
+            data = r.json()
+    except Exception as e:
+        log.warning("tk tx %s: %s", addr, e)
+        return False
+    if not data.get("ok"):
+        log.info("tk tx %s no salió: %s", addr, data.get("error"))
+        return False
+    return True
+
+
+async def _tk_wait_opcode(addr: str, opcode: str, sent_at: float, timeout: float) -> dict[str, Any] | None:
+    box = _tk_queue(addr)
+    deadline = time.monotonic() + timeout
+    imei = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"imei": imei, "payload": None, "opcode": None}
+        try:
+            item = await asyncio.wait_for(box.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            return {"imei": imei, "payload": None, "opcode": None}
+        if item.get("imei"):
+            imei = item["imei"]
+        if float(item.get("at") or 0) + 0.05 < sent_at:
+            continue
+        if item.get("opcode") == opcode and item.get("payload"):
+            if imei and not item.get("imei"):
+                item["imei"] = imei
+            return item
+
+
+async def _tk_log(addr: str, ip: str, session_id: str | None, payload: dict[str, Any] | None, status: str, error: str | None, http_status: int | None) -> None:
+    now = _now()
+    doc = {
+        "ts": now,
+        "i": (payload or {}).get("i"),
+        "status": status,
+        "source": "live",
+        "hour": homo.hour_key(now),
+        "payload": payload,
+        "http_status": http_status,
+        "error": error,
+        "host": homo.destination_host(homo.tk_url()),
+        "ip": ip,
+        "addr": addr,
+        "session_id": session_id,
+    }
+    try:
+        await db.homologate_log.insert_one(doc)
+    except Exception:
+        log.exception("tk: no se pudo registrar enviadas")
+    await broadcast({"type": "homologate", "status": status, "i": doc.get("i"), "addr": addr})
+
+
+async def _tk_one_cycle(addr: str, ip: str, session_id: str | None, known_imei: str | None) -> str:
+    started = time.monotonic()
+    sent = time.monotonic()
+    if not await _tk_send_hex(addr, ip, homo.TK_CMD_D02):
+        await _tk_log(addr, ip, session_id, None, "error", "no se pudo enviar 82A71000", None)
+        return "error"
+    first = await _tk_wait_opcode(addr, "82a700", sent, max(0.2, homo.TK_GAP_S - 0.2))
+    gap = homo.TK_GAP_S - (time.monotonic() - started)
+    if gap > 0:
+        await asyncio.sleep(gap)
+    sent = time.monotonic()
+    if not await _tk_send_hex(addr, ip, homo.TK_CMD_D03):
+        await _tk_log(addr, ip, session_id, None, "error", "no se pudo enviar 82A71001", None)
+        return "error"
+    second = await _tk_wait_opcode(addr, "82a701", sent, 10.0)
+    imei = (first or {}).get("imei") or (second or {}).get("imei") or known_imei
+    d02 = (first or {}).get("payload")
+    d03 = (second or {}).get("payload")
+    if not imei or not d02 or not d03:
+        missing = "sin IMEI" if not imei else "sin d02" if not d02 else "sin d03"
+        await _tk_log(addr, ip, session_id, None, "error", missing, None)
+        return "incomplete"
+    payload = homo.build_tk_payload(imei, d02, d03)
+    if not homo.env_enabled():
+        await _tk_log(addr, ip, session_id, payload, "error", "disabled", None)
+        return "disabled"
+    http_status, err = await _post_json(homo.tk_url(), payload)
+    await _tk_log(
+        addr,
+        ip,
+        session_id,
+        payload,
+        "ok" if http_status else "error",
+        None if http_status else err,
+        http_status,
+    )
+    log.info("tk homologate %s i=%s http=%s", "ok" if http_status else err, imei, http_status)
+    return "ok" if http_status else "error"
+
+
+async def _tk_poll_loop(addr: str, ip: str, session_id: str | None) -> None:
+    try:
+        while True:
+            dev = await db.devices.find_one({"addr": addr}, {"is_connected": 1, "imei": 1, "session_id": 1, "ip": 1})
+            if not dev or not dev.get("is_connected"):
+                return
+            cycle = time.monotonic()
+            try:
+                result = await _tk_one_cycle(
+                    addr,
+                    dev.get("ip") or ip,
+                    dev.get("session_id") or session_id,
+                    dev.get("imei"),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("tk poll %s", addr)
+                result = "error"
+            rest = homo.TK_PERIOD_S - (time.monotonic() - cycle)
+            if rest > 0:
+                await asyncio.sleep(rest)
+    except asyncio.CancelledError:
+        return
+    finally:
+        current = _tk_tasks.get(addr)
+        if current is asyncio.current_task():
+            _tk_tasks.pop(addr, None)
+
+
+async def _tk_resume_connected() -> None:
+    await asyncio.sleep(2)
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http:
+            r = await http.get(f"{BRIDGE_URL}/devices")
+            devices = r.json().get("devices") or []
+    except Exception:
+        log.info("tk: no se pudieron retomar las conexiones del bridge")
+        return
+    for dev in devices:
+        _tk_start(dev.get("addr"), dev.get("ip"), dev.get("session_id"))
+    if devices:
+        log.info("tk: ciclo de lectura en %s conexión(es)", len(devices))
+
+
+async def _post_json(url: str, payload: dict[str, Any]) -> tuple[int | None, str | None]:
+    last_err = None
+    retries = homo.env_retries()
+    timeout = homo.env_timeout()
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                r = await http.post(url, json=payload)
+            if 200 <= r.status_code < 300:
+                return r.status_code, None
+            last_err = f"http_{r.status_code}: {r.text[:180]}"
+        except Exception as e:
+            last_err = str(e)
+        if attempt < retries:
+            await asyncio.sleep(0.5 * attempt)
+    return None, last_err
 
 
 async def _post_standard(payload: dict[str, Any]) -> tuple[int | None, str | None]:

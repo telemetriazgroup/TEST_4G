@@ -29,8 +29,19 @@ def env_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+TK_URL_DEFAULT = "http://161.132.53.51:9050/TermoKing/"
+TK_CMD_D02 = "1B0204000082A71000CAE91B04"
+TK_CMD_D03 = "1B0204000082A71001DAC81B04"
+TK_GAP_S = 5.0
+TK_PERIOD_S = 60.0
+
+
 def env_url() -> str:
     return (os.getenv("HOMOLOGATE_URL", "") or "").strip()
+
+
+def tk_url() -> str:
+    return env_url() or TK_URL_DEFAULT
 
 
 def env_unit() -> str:
@@ -259,3 +270,49 @@ def classify_frame(doc: dict[str, Any]) -> dict[str, Any]:
     if incomplete:
         result["status"] = "incomplete"
     return result
+
+
+def _ascii_digits(hex_pairs: str) -> str | None:
+    raw = str(hex_pairs or "")
+    if not raw or len(raw) % 2:
+        return None
+    try:
+        text = bytes.fromhex(raw).decode("ascii")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not text.isdigit() or not 14 <= len(text) <= 17:
+        return None
+    return text
+
+
+def parse_tk_rx(hex_str: str | None) -> dict[str, Any] | None:
+    """IMEI en ASCII-hex, separador ffffffff, y el bloque 82A700 (d02) o 82A701 (d03)."""
+    blob = re.sub(r"[^0-9a-fA-F]", "", str(hex_str or "")).lower()
+    if not blob:
+        return None
+    marker = "ffffffff"
+    idx = blob.find(marker)
+    if idx >= 0 and idx % 2 == 0:
+        imei = _ascii_digits(blob[:idx])
+        payload = blob[idx + len(marker) :]
+        opcode = None
+        if "82a700" in payload:
+            opcode = "82a700"
+        elif "82a701" in payload:
+            opcode = "82a701"
+        if imei or payload:
+            return {"imei": imei, "payload": payload, "opcode": opcode}
+    imei = _ascii_digits(blob)
+    if imei:
+        return {"imei": imei, "payload": "", "opcode": None}
+    return None
+
+
+def build_tk_payload(imei: str, d02: str, d03: str, unit: str | None = None) -> dict[str, Any]:
+    return {
+        "i": str(imei),
+        "d01": unit or env_unit(),
+        "d02": str(d02 or "").lower(),
+        "d03": str(d03 or "").lower(),
+        "d08": "",
+    }
