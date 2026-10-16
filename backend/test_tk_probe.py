@@ -66,6 +66,31 @@ def test_pasted_rx_splits_imei():
     assert decoded["fields"]
 
 
+D02 = "1B0204000082A700C2FEFE7FFFFEC4FE5801C802FF7F0601FE7FFE7FFE7FFE7FFE7FFE7FFE7FFE7FA9013C005D005E005C00FE7FFE7F1E0064009C0158B21000A2010000D4930100FE7FFE7FC2FEFFFE3D0D000023029200FE7FFF7F5FD21B04"
+D03 = "1B0204000082A70100003CF66400030100FE00FE7FFE7FFE7FFE7F0807060000FFFFFFFF90AA1B04"
+
+
+def test_live_sensor_and_control_match_signed_values():
+    from tk_analysis import decode_document
+
+    doc = decode_document(D02 + D03)
+    assert len(doc["items"]) == 2
+    sensor, control = doc["items"]
+    assert _value(sensor, "Suministro 1") == "-31.8 °C"
+    assert _value(sensor, "Suministro 2") == "E01"
+    assert _value(sensor, "Retorno") == "-25.7 °C"
+    assert _value(sensor, "Serpentín compresor 2") == "E00"
+    assert _value(sensor, "Tensión de línea") == "425 V"
+    assert _value(sensor, "Corriente fase 1") == "9.3 A"
+    assert _value(sensor, "Consumo") == "5.47 kW"
+    assert "C2 FE" in sensor["fields"][0]["detail"]
+    assert _value(control, "Setpoint") == "-25.0 °C"
+    assert _value(control, "Carga de capacidad") == "100 %"
+    assert _value(control, "Setpoint de humedad") == "E98"
+    assert _value(control, "Fin de deshielo") == "18.0 °C"
+    assert control["fields"][0]["detail"]
+
+
 def test_alarm_number():
     decoded = decode_pasted(ALARM, "alarms")
     assert decoded["crc_ok"] is True

@@ -12,6 +12,7 @@ from decode_tk import (
     crc16_tk,
     decode_82a700,
     decode_82a701,
+    decode_fp,
     decode_82a702,
     decode_82a703,
     decode_82a706,
@@ -211,12 +212,6 @@ def _u16(data: bytes, off: int) -> int | None:
     return int.from_bytes(data[off : off + 2], "little")
 
 
-def _i16(data: bytes, off: int) -> int | None:
-    if off + 2 > len(data):
-        return None
-    return int.from_bytes(data[off : off + 2], "little", signed=True)
-
-
 def _byte(data: bytes, off: int) -> int | None:
     return data[off] if off < len(data) else None
 
@@ -224,28 +219,55 @@ def _byte(data: bytes, off: int) -> int | None:
 def _fp_text(item: dict[str, Any] | None) -> str:
     if not item:
         return "sin dato"
+    if item.get("code"):
+        return str(item["code"])
     status = item.get("status")
     if status == "ok":
         unit = item.get("unit") or ""
         return f"{item.get('value')} {unit}".strip()
     labels = {
-        "na": "no aplica",
+        "na": "E01",
         "missing": "sin dato",
         "error": "error de sensor",
-        "initializing": "inicializando",
-        "unused": "no se usa",
-        "open": "abierto",
-        "short": "corto",
-        "above": "por encima",
-        "below": "por debajo",
+        "initializing": "E00",
+        "unused": "E98",
+        "open": "sensor abierto",
+        "short": "sensor en corto",
+        "above": "por encima de rango",
+        "below": "por debajo de rango",
         "no_comm": "sin comunicación",
         "warmup": "calentando",
+        "reserved": "código reservado",
     }
     return labels.get(status, str(status or "sin dato"))
 
 
-def _row(name: str, value: Any) -> dict[str, str]:
-    return {"name": name, "value": "—" if value is None else str(value)}
+def _row(name: str, value: Any, detail: str | None = None) -> dict[str, str]:
+    row = {"name": name, "value": "—" if value is None else str(value)}
+    if detail:
+        row["detail"] = detail
+    return row
+
+
+def _hx(data: bytes, off: int, n: int = 2) -> str:
+    return data[off : off + n].hex().upper() if off + n <= len(data) else ""
+
+
+def _detail_fp(data: bytes, off: int, exp: int, item: dict[str, Any], width: int = 2) -> str:
+    if off + width > len(data):
+        return "no llegaron esos bytes"
+    chunk = data[off : off + width]
+    shown = " ".join(f"{b:02X}" for b in chunk)
+    if width == 2:
+        raw = int.from_bytes(chunk, "little", signed=False)
+        signed = int.from_bytes(chunk, "little", signed=True)
+    else:
+        raw = int.from_bytes(chunk, "little", signed=False)
+        signed = raw
+    if item.get("status") != "ok":
+        return f"{shown} → 0x{raw:0{width*2}X} → {_fp_text(item)}"
+    scale = {0: "tal cual", -1: "÷10", -2: "÷100"}.get(exp, f"×10^{exp}")
+    return f"{shown} → {signed} → {scale} → {_fp_text(item)}"
 
 
 def _bcd(b: int) -> int | None:
@@ -271,27 +293,62 @@ def _cstring(data: bytes, off: int, size: int) -> str:
 
 
 def _fp100(data: bytes, off: int, unit: str = "°C") -> str:
-    raw = _i16(data, off)
-    if raw is None:
-        return "sin dato"
-    u = raw & 0xFFFF
-    if u >= 0x7FF0:
-        return "no aplica"
-    return f"{raw / 100:.2f} {unit}"
+    return _fp_text(decode_fp(_u16(data, off), -2, unit))
 
 
 def _fp10(data: bytes, off: int, unit: str = "°C") -> str:
-    raw = _i16(data, off)
-    if raw is None:
-        return "sin dato"
-    if (raw & 0xFFFF) >= 0x7FF0:
-        return "no aplica"
-    return f"{raw / 10:.1f} {unit}"
+    return _fp_text(decode_fp(_u16(data, off), -1, unit))
 
 
 def fields_sensors(data: bytes) -> list[dict[str, str]]:
     decoded = decode_82a700(data)
-    return [_row(label, _fp_text(decoded.get(key))) for key, label in SENSOR_ES]
+    layout = [
+        (0, "supply1_air_temp", -1, 2),
+        (2, "supply2_air_temp", -1, 2),
+        (4, "return_air_temp", -1, 2),
+        (6, "evaporator1_coil_temp", -1, 2),
+        (8, "condenser_coil_temp", -1, 2),
+        (10, "compressor_coil_temp", -1, 2),
+        (12, "compressor2_coil_temp", -1, 2),
+        (14, "ambient_air_temp", -1, 2),
+        (16, "cargo1_temp", -1, 2),
+        (18, "cargo2_temp", -1, 2),
+        (20, "cargo3_temp", -1, 2),
+        (22, "cargo4_temp", -1, 2),
+        (24, "relative_humidity", 0, 2),
+        (26, "avlv", 0, 2),
+        (28, "suction_pressure", -2, 2),
+        (30, "discharge_pressure", -2, 2),
+        (32, "line_voltage", 0, 2),
+        (34, "line_frequency", 0, 2),
+        (36, "current_ph1", -1, 2),
+        (38, "current_ph2", -1, 2),
+        (40, "current_ph3", -1, 2),
+        (42, "co2", -1, 2),
+        (44, "o2", -1, 2),
+        (46, "evaporator_fan_speed", 0, 2),
+        (48, "condenser_fan_speed", 0, 2),
+        (50, "datalogger_battery_voltage", -1, 2),
+        (52, "power_meter_reading", -1, 4),
+        (56, "power_meter_trip_reading", -1, 4),
+        (60, "power_meter_trip_duration", 0, 4),
+        (64, "suction_temp", -1, 2),
+        (66, "discharge_temp", -1, 2),
+        (68, "supply_air_temp_showoff", -1, 2),
+        (70, "return_air_temp_showoff", -1, 2),
+        (72, "dl_battery_temp", -2, 2),
+        (74, "dl_battery_charge_current", -2, 2),
+        (76, "power_consumption", -2, 2),
+        (78, "power_consumption_avg_per_hour", -2, 2),
+        (80, "suction2_pressure", -1, 2),
+        (82, "suction2_temp", -1, 2),
+    ]
+    labels = dict(SENSOR_ES)
+    rows = []
+    for off, key, exp, width in layout:
+        item = decoded.get(key) or {}
+        rows.append(_row(labels.get(key, key), _fp_text(item), _detail_fp(data, off, exp, item, width)))
+    return rows
 
 
 def fields_control(data: bytes) -> list[dict[str, str]]:
@@ -299,27 +356,37 @@ def fields_control(data: bytes) -> list[dict[str, str]]:
     mode_id = (d.get("unit_mode") or {}).get("id")
     power = d.get("power") or {}
     valves = d.get("valves") or []
+    pwr = _byte(data, 6)
     rows = [
-        _row("Alarma presente", "sí" if d.get("alarm_present") else "no"),
-        _row("Setpoint", _fp_text(d.get("temperature_setpoint"))),
-        _row("Carga de capacidad", _fp_text(d.get("capacity_load"))),
-        _row("Alimentación CA", "sí" if power.get("ac_connected") else "no"),
-        _row("Unidad activa", "sí" if power.get("unit_active") else "no"),
-        _row("Modo de control", CONTROLLING.get(mode_id, f"código {mode_id}")),
-        _row("Control de humedad", d.get("humidity_control")),
-        _row("Setpoint de humedad", _fp_text(d.get("humidity_setpoint")) if isinstance(d.get("humidity_setpoint"), dict) else d.get("humidity_setpoint")),
-        _row("Aire fresco", d.get("fresh_air_exchange_mode")),
-        _row("Caudal de aire fresco", _fp_text(d.get("fresh_air_exchange_rate"))),
-        _row("Retardo de aire fresco", _fp_text(d.get("fresh_air_exchange_delay"))),
-        _row("Setpoint O₂", _fp_text(d.get("setpoint_o2"))),
-        _row("Setpoint CO₂", _fp_text(d.get("setpoint_co2"))),
-        _row("Fin de deshielo", _fp_text(d.get("defrost_termination_temp"))),
-        _row("Intervalo de deshielo", d.get("defrost_interval_h")),
-        _row("Condensador por agua", "sí" if d.get("water_cooled_condenser") else "no"),
-        _row("Viaje USDA", "sí" if d.get("usda_trip") else "no"),
+        _row("Alarma presente", "sí" if d.get("alarm_present") else "no", _detail_fp(data, 0, 0, {"status": "ok", "value": int(bool(d.get("alarm_present"))), "unit": ""})),
+        _row("Setpoint", _fp_text(d.get("temperature_setpoint")), _detail_fp(data, 2, -2, d.get("temperature_setpoint") or {})),
+        _row("Carga de capacidad", _fp_text(d.get("capacity_load")), _detail_fp(data, 4, 0, d.get("capacity_load") or {})),
+        _row(
+            "Estado de potencia",
+            f"{pwr} · CA {'sí' if power.get('ac_connected') else 'no'} · activa {'sí' if power.get('unit_active') else 'no'}",
+            f"{_hx(data, 6, 1)} → bit0 alimentación, bit1 unidad activa",
+        ),
+        _row("Modo de control", f"{CONTROLLING.get(mode_id, 'código')} ({mode_id})", f"{_hx(data, 7, 1)} → {mode_id}"),
+        _row("Control de humedad", d.get("humidity_control"), f"{_hx(data, 8, 1)} → 0 apagado, 1 deshumidificar"),
+        _row("Setpoint de humedad", _fp_text(d.get("humidity_setpoint")), _detail_fp(data, 9, 0, d.get("humidity_setpoint") or {}, 1) if (d.get("humidity_setpoint") or {}).get("status") == "ok" else f"{_hx(data, 9, 1)} → E98"),
+        _row("Aire fresco", d.get("fresh_air_exchange_mode"), f"{_hx(data, 10, 1)} → 0 apagado, 1 unidades, 2 demanda"),
+        _row("Caudal de aire fresco", _fp_text(d.get("fresh_air_exchange_rate")), _detail_fp(data, 11, 0, d.get("fresh_air_exchange_rate") or {})),
+        _row("Retardo de aire fresco", _fp_text(d.get("fresh_air_exchange_delay")), _detail_fp(data, 13, -1, d.get("fresh_air_exchange_delay") or {})),
+        _row("Setpoint O₂", _fp_text(d.get("setpoint_o2")), _detail_fp(data, 15, -1, d.get("setpoint_o2") or {})),
+        _row("Setpoint CO₂", _fp_text(d.get("setpoint_co2")), _detail_fp(data, 17, -1, d.get("setpoint_co2") or {})),
+        _row("Fin de deshielo", _fp_text(d.get("defrost_termination_temp")), _detail_fp(data, 19, -2, d.get("defrost_termination_temp") or {})),
+        _row("Intervalo de deshielo", d.get("defrost_interval_h"), f"{_hx(data, 21, 1)} → horas"),
+        _row("Condensador por agua", "sí" if d.get("water_cooled_condenser") else "no", f"{_hx(data, 22, 1)}"),
+        _row("Viaje USDA", "sí" if d.get("usda_trip") else "no", f"{_hx(data, 23, 1)}"),
     ]
-    for valve in valves:
-        rows.append(_row(f"Válvula {valve.get('name')}", _fp_text(valve)))
+    valve_es = {
+        "evaporator_expansion": "Válvula de expansión del evaporador",
+        "suction_modulation": "Válvula de modulación de succión",
+        "hot_gas": "Válvula de gas caliente",
+        "economizer": "Válvula economizadora",
+    }
+    for index, valve in enumerate(valves):
+        rows.append(_row(valve_es.get(valve.get("name"), valve.get("name")), _fp_text(valve), f"{_hx(data, 24 + index, 1)} → {_fp_text(valve)}"))
     return rows
 
 
@@ -668,6 +735,35 @@ ANALYZERS = {
 _BY_OPCODE = {op: cid for cid, (_title, op, _fn) in ANALYZERS.items()}
 
 
+def frames_in(text: str) -> list[dict[str, str | None]]:
+    """Todas las tramas 1B02…1B04 que haya en el texto, aunque venga un JSON con d02 y d03."""
+    blob = "".join(ch for ch in str(text or "") if ch in "0123456789abcdefABCDEF")
+    low = blob.lower()
+    imei = None
+    head = low.split("1b02", 1)[0]
+    cut = head.rfind("ffffffff")
+    sample = head[:cut] if cut >= 0 else head
+    try:
+        raw_head = bytes.fromhex(sample)
+        text_imei = raw_head.decode("ascii")
+        if text_imei.isdigit() and 14 <= len(text_imei) <= 17:
+            imei = text_imei
+    except ValueError:
+        imei = None
+    found: list[dict[str, str | None]] = []
+    start = 0
+    while True:
+        at = low.find("1b02", start)
+        if at < 0:
+            break
+        end = low.find("1b04", at + 4)
+        if end < 0:
+            break
+        found.append({"imei": imei, "frame": low[at : end + 4]})
+        start = end + 4
+    return found
+
+
 def isolate_frame(text: str) -> dict[str, str | None]:
     """Quita el IMEI y el ffffffff. Devuelve la trama 1B02…1B04."""
     blob = "".join(str(text or "").split())
@@ -732,3 +828,20 @@ def decode_pasted(text: str, query: str | None = None) -> dict[str, Any]:
         "fields": fields,
         "warning": None if frame["crc_ok"] else "el CRC no cierra",
     }
+
+
+def decode_document(text: str, query: str | None = None) -> dict[str, Any]:
+    pieces = frames_in(text)
+    if not pieces:
+        one = decode_pasted(text, query)
+        one["items"] = [one] if one.get("fields") else []
+        return one
+    items = []
+    for piece in pieces:
+        # Cada trama se clasifica por su propio opcode, salvo que pidan un tipo fijo.
+        item = decode_pasted(piece["frame"] or "", query)
+        if piece.get("imei") and not item.get("imei"):
+            item["imei"] = piece["imei"]
+        items.append(item)
+    first = items[0]
+    return {**first, "items": items, "ok": any(item.get("ok") for item in items)}

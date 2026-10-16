@@ -277,6 +277,20 @@ body.is-client .layout { display: none; }
 .probe-fields { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
 .probe-fields td { padding: 0.12rem 0.45rem 0.12rem 0; vertical-align: top; }
 .probe-fields td:first-child { color: var(--muted); width: 16rem; }
+.probe-frame {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  word-break: break-all;
+  margin: 0 0 0.4rem;
+}
+.probe-step { display: none; }
+.probe-card.open .probe-step { display: table-row; }
+.probe-step td {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding-bottom: 0.35rem;
+}
 
 .tab-panel { display: none !important; }
 .tab-panel.active { display: flex !important; }

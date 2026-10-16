@@ -125,10 +125,12 @@ def decode_fp(raw: int | None, exp: int, unit: str = "") -> dict[str, Any]:
     if raw is None:
         return {"value": None, "status": "missing", "unit": unit, "raw": None}
     u = raw & 0xFFFF
-    if u >= 0x7FF0:
+    # Solo 7FF0–7FFF son códigos. 8000–FFFF es un entero con signo (temperatura negativa).
+    if 0x7FF0 <= u <= 0x7FFF:
         return {
             "value": None,
             "status": SPECIAL.get(u, "reserved"),
+            "code": {0x7FFF: "E00", 0x7FFE: "E01"}.get(u),
             "unit": unit,
             "raw": u,
         }
@@ -165,7 +167,7 @@ def decode_82a700(data: bytes) -> dict[str, Any]:
         (26, "avlv", 0, "CMH"),
         (28, "suction_pressure", -2, "bar"),
         (30, "discharge_pressure", -2, "bar"),
-        (32, "line_voltage", -1, "V"),
+        (32, "line_voltage", 0, "V"),
         (34, "line_frequency", 0, "Hz"),
         (36, "current_ph1", -1, "A"),
         (38, "current_ph2", -1, "A"),
@@ -184,11 +186,13 @@ def decode_82a700(data: bytes) -> dict[str, Any]:
         (56, "power_meter_trip_reading", -1, "kWh"),
     ):
         raw32 = _u32(data, off)
-        out[name] = (
-            {"value": raw32 * (10**exp), "status": "ok", "unit": unit, "raw": raw32}
-            if raw32 is not None
-            else decode_fp(None, exp, unit)
-        )
+        if raw32 is None:
+            out[name] = decode_fp(None, exp, unit)
+        else:
+            value = raw32 * (10**exp)
+            if exp < 0:
+                value = round(value, -exp)
+            out[name] = {"value": value, "status": "ok", "unit": unit, "raw": raw32}
     dur = _u32(data, 60)
     out["power_meter_trip_duration"] = (
         {"value": dur, "status": "ok", "unit": "s", "raw": dur}
@@ -202,9 +206,9 @@ def decode_82a700(data: bytes) -> dict[str, Any]:
         (70, "return_air_temp_showoff", -1, "°C"),
         (72, "dl_battery_temp", -2, "°C"),
         (74, "dl_battery_charge_current", -2, "A"),
-        (76, "power_consumption", -2, "kWh"),
-        (78, "power_consumption_avg_per_hour", -2, "kWh"),
-        (80, "suction2_pressure", -2, "bar"),
+        (76, "power_consumption", -2, "kW"),
+        (78, "power_consumption_avg_per_hour", -2, "kW"),
+        (80, "suction2_pressure", -1, "bar"),
         (82, "suction2_temp", -1, "°C"),
     ):
         out[name] = decode_fp(_u16(data, off), exp, unit)
@@ -227,8 +231,8 @@ def decode_82a701(data: bytes) -> dict[str, Any]:
         b = data[off] if len(data) > off else None
         if b is None:
             valves.append({"name": name, "value": None, "status": "missing"})
-        elif b == 0xFF:
-            valves.append({"name": name, "value": None, "status": "unused", "unit": "%"})
+        elif b in (0xFE, 0xFF):
+            valves.append({"name": name, "value": None, "status": "unused", "code": "E98", "unit": "%", "raw": b})
         else:
             valves.append({"name": name, "value": b, "status": "ok", "unit": "%"})
     return {
@@ -245,9 +249,13 @@ def decode_82a701(data: bytes) -> dict[str, Any]:
             "name": UNIT_MODES.get(mode, "unknown") if mode is not None else None,
         },
         "humidity_control": {0: "off", 1: "dehum"}.get(hum_c, hum_c),
-        "humidity_setpoint": {"value": data[9], "unit": "%", "status": "ok"}
-        if len(data) > 9
-        else {"value": None, "status": "missing", "unit": "%"},
+        "humidity_setpoint": (
+            {"value": None, "status": "unused", "code": "E98", "unit": "%", "raw": data[9]}
+            if len(data) > 9 and data[9] in (0xFE, 0xFF)
+            else {"value": data[9], "unit": "%", "status": "ok", "raw": data[9]}
+            if len(data) > 9
+            else {"value": None, "status": "missing", "unit": "%"}
+        ),
         "fresh_air_exchange_mode": FAE_MODES.get(fae, fae),
         "fresh_air_exchange_rate": decode_fp(_u16(data, 11), 0, "CMH"),
         "fresh_air_exchange_delay": decode_fp(_u16(data, 13), -1, "h"),

@@ -2211,7 +2211,7 @@ async def tk_probe_run(body: ProbeBody):
 async def tk_decode(body: DecodeBody):
     if not (body.hex or "").strip():
         raise HTTPException(400, "pega una trama")
-    return tk_analysis.decode_pasted(body.hex, body.query)
+    return tk_analysis.decode_document(body.hex, body.query)
 
 
 @app.get("/api/devices")

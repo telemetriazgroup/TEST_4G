@@ -2600,7 +2600,12 @@
 
   function probeCard(item) {
     const fields = (item.fields || [])
-      .map((row) => `<tr><td>${esc(row.name)}</td><td>${esc(row.value)}</td></tr>`)
+      .map((row) => {
+        const step = row.detail
+          ? `<tr class="probe-step"><td colspan="2">${esc(row.detail)}</td></tr>`
+          : "";
+        return `<tr><td>${esc(row.name)}</td><td>${esc(row.value)}</td></tr>${step}`;
+      })
       .join("");
     const head = item.title || item.id || "Consulta";
     const flag = item.ok === false
@@ -2608,11 +2613,29 @@
       : "";
     const crc = item.crc_ok === false ? `<p class="bad">CRC no cierra</p>` : "";
     const imei = item.imei ? `<p class="hint">IMEI ${esc(item.imei)}</p>` : "";
+    const frame = item.frame
+      ? `<p class="probe-frame">${esc(item.opcode || "")} ${esc(item.frame)}</p>`
+      : "";
+    const toggle = fields
+      ? `<button type="button" class="btn ghost probe-toggle">Detalle</button>`
+      : "";
     return (
-      `<article class="probe-card"><h3>${esc(head)}</h3>${flag}${crc}${imei}` +
+      `<article class="probe-card"><h3>${esc(head)} ${toggle}</h3>${frame}${flag}${crc}${imei}` +
       (fields ? `<table class="probe-fields">${fields}</table>` : "") +
       `</article>`
     );
+  }
+
+  function bindProbeDetail(root) {
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = "1";
+    root.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".probe-toggle");
+      if (!btn) return;
+      const card = btn.closest(".probe-card");
+      card.classList.toggle("open");
+      btn.textContent = card.classList.contains("open") ? "Ocultar" : "Detalle";
+    });
   }
 
   async function loadDecodeCatalog() {
@@ -2714,7 +2737,10 @@
       if (hint) {
         hint.textContent = `Sesión ${data.session_id || "—"} · IMEI ${data.imei || "—"} · el ciclo volvió al terminar`;
       }
-      if (out) out.innerHTML = (data.results || []).map(probeCard).join("");
+      if (out) {
+        out.innerHTML = (data.results || []).map(probeCard).join("");
+        bindProbeDetail(out);
+      }
     } catch (e) {
       if (hint) hint.textContent = String(e);
     } finally {
@@ -2743,7 +2769,11 @@
           ? `IMEI ${data.imei} · ${data.opcode || ""}`
           : (data.error || data.opcode || "listo");
       }
-      if (out) out.innerHTML = probeCard(data);
+      if (out) {
+        const items = data.items && data.items.length ? data.items : [data];
+        out.innerHTML = items.map(probeCard).join("");
+        bindProbeDetail(out);
+      }
     } catch (e) {
       if (hint) hint.textContent = String(e);
     }
