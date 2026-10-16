@@ -309,6 +309,10 @@
     emptySent: document.getElementById("emptySent"),
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
+    sentFrom: document.getElementById("sentFrom"),
+    sentTo: document.getElementById("sentTo"),
+    btnSentPrev: document.getElementById("btnSentPrev"),
+    btnSentNext: document.getElementById("btnSentNext"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
@@ -391,6 +395,20 @@
   /** @type {Array<{date:string,count:number,rx:number,tx:number}>} */
   let archiveDays = [];
   let archiveSelectedDate = "";
+  let historyHours = [];
+  let historyOpen = "";
+  let historySkip = 0;
+  let historyTotal = 0;
+  let historyStale = false;
+  let historyFallback = "";
+  let archiveHours = [];
+  let archiveHour = "";
+  let archiveSkip = 0;
+  let archiveTotal = 0;
+  let archiveStale = false;
+  let sentSkip = 0;
+  let sentTotal = 0;
+  const PAGE = 100;
   let statusSelectedDate = "";
   /** @type {Array<{date:string,count:number}>} */
   let statusDays = [];
@@ -1152,38 +1170,149 @@
     }
   }
 
+  function scopeParams() {
+    const p = new URLSearchParams();
+    if (selected && selected.ip) p.set("ip", selected.ip);
+    else if (selected && selected.addr) p.set("addr", selected.addr);
+    return p;
+  }
+
+  function addFrameFilters(p, dirEl, typeEl) {
+    if (dirEl && dirEl.value && dirEl.value !== "all") p.set("direction", dirEl.value);
+    if (typeEl && typeEl.value && typeEl.value !== "all") p.set("value_type", typeEl.value);
+    return p;
+  }
+
+  function renderFrameTable(container, rows, viewMode) {
+    const showHex = viewMode === "hex" || viewMode === "both";
+    const showAscii = viewMode === "ascii" || viewMode === "both";
+    const table = document.createElement("table");
+    table.className = "capture-table";
+    table.innerHTML =
+      `<thead><tr><th>Hora</th><th>Dir</th><th>Tipo</th>` +
+      (showHex ? `<th>HEX</th>` : "") +
+      (showAscii ? `<th>ASCII</th>` : "") +
+      `<th>Decimal</th><th>Dispositivo</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    for (const msg of rows) {
+      const dir = (msg.direction || "rx").toLowerCase();
+      const type = normalizeType(msg);
+      const isHdr = type === "tcp_header";
+      const tr = document.createElement("tr");
+      tr.className = `cap-${dir}`;
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(msg.ts))}</td>` +
+        `<td><span class="dir-badge dir-${dir}">${esc(dir.toUpperCase())}</span></td>` +
+        `<td><span class="type-badge type-${esc(type)}">${esc(type.toUpperCase())}</span></td>` +
+        (showHex ? `<td class="mono hex">${esc(isHdr ? "—" : msg.hex || "—")}</td>` : "") +
+        (showAscii ? `<td class="mono ascii">${esc(isHdr ? "—" : asciiOf(msg))}</td>` : "") +
+        `<td class="mono val">${esc(isHdr ? "—" : decimalOf(msg))}</td>` +
+        `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+
+  function renderPager(container, skip, total, onMove) {
+    const nav = document.createElement("div");
+    nav.className = "page-nav";
+    const from = total ? skip + 1 : 0;
+    const to = Math.min(skip + PAGE, total);
+    const label = document.createElement("span");
+    label.textContent = total ? `${from}–${to} de ${total}` : "0 tramas";
+    const prev = document.createElement("button");
+    prev.type = "button";
+    prev.className = "btn ghost";
+    prev.textContent = "◀ 100";
+    prev.disabled = skip <= 0;
+    prev.addEventListener("click", () => onMove(Math.max(0, skip - PAGE)));
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "btn ghost";
+    next.textContent = "100 ▶";
+    next.disabled = skip + PAGE >= total;
+    next.addEventListener("click", () => onMove(skip + PAGE));
+    nav.appendChild(prev);
+    nav.appendChild(label);
+    nav.appendChild(next);
+    container.appendChild(nav);
+  }
+
   function renderHistory() {
-    const rows = history.filter(passesHistoryFilters);
-    els.emptyHistory.classList.toggle("show", rows.length === 0);
-    renderHourGroups(
-      els.historyHours,
-      rows,
-      historyViewMode(),
-      openHours,
-      els.historyMeta,
-      "",
-      exportHistory
-    );
+    const box = els.historyHours;
+    box.innerHTML = "";
+    const note = historyFallback
+      ? `Sin tramas en los últimos días. Horas del último día con conexión: ${formatDayLabel(historyFallback)}.`
+      : historyStale
+        ? `${historyHours.length} hora(s). La más reciente no es de hoy.`
+        : `${historyHours.length} hora(s) con tramas. Abre una hora para ver 100.`;
+    els.historyMeta.textContent = note + (selected && selected.ip ? ` · ${selected.ip}` : "");
+    els.emptyHistory.classList.toggle("show", historyHours.length === 0 && history.length === 0);
+    for (const hour of historyHours) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hour-pick" + (hour.hour === historyOpen ? " active" : "");
+      btn.innerHTML =
+        `<span>${esc(hour.hour)}</span><span class="hour-meta">${hour.count} tramas · RX ${hour.rx} · TX ${hour.tx}</span>`;
+      btn.addEventListener("click", () => openHistoryHour(hour.hour, 0));
+      box.appendChild(btn);
+    }
+    if (!historyOpen) return;
+    renderPager(box, historySkip, historyTotal, (skip) => openHistoryHour(historyOpen, skip));
+    if (history.length) renderFrameTable(box, history, historyViewMode());
+    else {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = "Esa hora no tiene tramas con los filtros actuales.";
+      box.appendChild(p);
+    }
   }
 
   async function loadHistory() {
-    els.historyMeta.textContent = "Cargando histórico…";
+    els.historyMeta.textContent = "Contando tramas por hora…";
+    historyOpen = "";
+    historySkip = 0;
+    history = [];
+    historyTotal = 0;
     try {
-      const q = selected
-        ? `addr=${encodeURIComponent(selected.addr)}&limit=2000`
-        : "limit=2000";
-      const r = await fetch(`${API}/api/history?${q}`);
+      const p = addFrameFilters(scopeParams(), els.filterDir, els.filterType);
+      const r = await fetch(`${API}/api/history/hours?${p}`);
       const data = await r.json();
-      history = data.messages || [];
+      if (!r.ok) throw new Error(data.detail || "no se pudo contar");
+      historyHours = data.hours || [];
+      historyStale = !!data.stale;
+      historyFallback = data.fallback_day || "";
       renderHistory();
-      scanHomologate();
     } catch (e) {
       els.historyMeta.textContent = String(e);
     }
   }
 
-  function historyQueryBase() {
-    return selected ? `addr=${encodeURIComponent(selected.addr)}` : "";
+  async function openHistoryHour(hour, skip) {
+    historyOpen = hour;
+    historySkip = skip;
+    els.historyMeta.textContent = `Cargando ${hour}…`;
+    try {
+      const p = addFrameFilters(scopeParams(), els.filterDir, els.filterType);
+      p.set("hour", hour);
+      p.set("skip", String(skip));
+      p.set("limit", String(PAGE));
+      p.set("order", "asc");
+      const r = await fetch(`${API}/api/history?${p}`);
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "no se pudo leer la hora");
+      history = data.messages || [];
+      historyTotal = data.total || 0;
+      renderHistory();
+      const from = historyTotal ? skip + 1 : 0;
+      const to = Math.min(skip + history.length, historyTotal);
+      els.historyMeta.textContent =
+        `${hour} · ${from}–${to} de ${historyTotal}` +
+        (selected && selected.ip ? ` · ${selected.ip}` : "");
+    } catch (e) {
+      els.historyMeta.textContent = String(e);
+    }
   }
 
   function renderArchiveDayList() {
@@ -1210,30 +1339,64 @@
   }
 
   function renderArchive() {
-    const rows = archive.filter(passesArchiveFilters);
-    els.emptyArchive.classList.toggle("show", !archiveSelectedDate || rows.length === 0);
+    const box = els.archiveHours;
+    box.innerHTML = "";
     const dayLabel = archiveSelectedDate ? formatDayLabel(archiveSelectedDate) : "";
-    renderHourGroups(
-      els.archiveHours,
-      rows,
-      archiveViewMode(),
-      openArchiveHours,
-      els.archiveMeta,
-      archiveSelectedDate ? `${dayLabel} · ` : "",
-      exportArchive
-    );
-    if (archiveSelectedDate && rows.length === 0) {
-      els.archiveMeta.textContent = `${dayLabel} · sin tramas para los filtros actuales`;
+    els.emptyArchive.classList.toggle("show", !archiveSelectedDate);
+    if (!archiveSelectedDate) {
+      els.archiveMeta.textContent = "Elige un día. La lista solo trae la cantidad de tramas.";
+      return;
+    }
+    const showingLast = archiveDays[0] && archiveDays[0].date === archiveSelectedDate;
+    const staleNote = archiveStale && showingLast
+      ? `Sin tramas hoy. Último día con conexión: ${dayLabel}. `
+      : `${dayLabel}. `;
+    const where = archiveHour
+      ? `Hora ${archiveHour}`
+      : "Últimas tramas de ese día";
+    const from = archiveTotal ? archiveSkip + 1 : 0;
+    const to = Math.min(archiveSkip + archive.length, archiveTotal);
+    els.archiveMeta.textContent =
+      `${staleNote}${where} · ${from}–${to} de ${archiveTotal}` +
+      (selected && selected.ip ? ` · ${selected.ip}` : "");
+    for (const hour of archiveHours) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hour-pick" + (hour.hour === archiveHour ? " active" : "");
+      btn.innerHTML =
+        `<span>${esc(hour.hour)}</span><span class="hour-meta">${hour.count} tramas · RX ${hour.rx} · TX ${hour.tx}</span>`;
+      btn.addEventListener("click", () => openArchiveHour(hour.hour, 0));
+      box.appendChild(btn);
+    }
+    if (archiveHour) {
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "btn ghost";
+      back.textContent = "Últimas 100 del día";
+      back.addEventListener("click", () => openArchiveTail(0));
+      box.appendChild(back);
+    }
+    renderPager(box, archiveSkip, archiveTotal, (skip) => {
+      if (archiveHour) openArchiveHour(archiveHour, skip);
+      else openArchiveTail(skip);
+    });
+    if (archive.length) renderFrameTable(box, archive, archiveViewMode());
+    else if (archiveTotal === 0) {
+      const p = document.createElement("p");
+      p.className = "hint";
+      p.textContent = "Ese día no tiene tramas con los filtros actuales.";
+      box.appendChild(p);
     }
   }
 
   async function loadArchiveDays() {
     try {
-      const base = historyQueryBase();
-      const url = base ? `${API}/api/history/days?${base}` : `${API}/api/history/days`;
-      const r = await fetch(url);
+      const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
+      const r = await fetch(`${API}/api/history/days?${p}`);
       const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "no se pudieron contar los días");
       archiveDays = data.days || [];
+      archiveStale = !!data.stale;
       renderArchiveDayList();
       if (!archiveSelectedDate && archiveDays.length > 0) {
         setArchiveDateInput(archiveDays[0].date);
@@ -1243,25 +1406,56 @@
     }
   }
 
+  async function loadArchiveHours(dateKey) {
+    const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
+    p.set("date", dateKey);
+    const r = await fetch(`${API}/api/history/hours?${p}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se pudieron contar las horas");
+    archiveHours = data.hours || [];
+  }
+
+  async function openArchiveTail(skip) {
+    archiveHour = "";
+    archiveSkip = skip;
+    const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
+    p.set("date", archiveSelectedDate);
+    p.set("order", "desc");
+    p.set("skip", String(skip));
+    p.set("limit", String(PAGE));
+    const r = await fetch(`${API}/api/history?${p}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se pudo leer el día");
+    archive = data.messages || [];
+    archiveTotal = data.total || 0;
+    renderArchive();
+  }
+
+  async function openArchiveHour(hour, skip) {
+    archiveHour = hour;
+    archiveSkip = skip;
+    const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
+    p.set("hour", hour);
+    p.set("order", "asc");
+    p.set("skip", String(skip));
+    p.set("limit", String(PAGE));
+    const r = await fetch(`${API}/api/history?${p}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se pudo leer la hora");
+    archive = data.messages || [];
+    archiveTotal = data.total || 0;
+    renderArchive();
+  }
+
   async function loadArchiveDay(dateKey) {
     if (!dateKey) return;
     setArchiveDateInput(dateKey);
-    openArchiveHours.clear();
-    els.archiveMeta.textContent = `Cargando ${formatDayLabel(dateKey)}…`;
+    archiveHour = "";
+    archiveSkip = 0;
+    els.archiveMeta.textContent = `Contando ${formatDayLabel(dateKey)}…`;
     try {
-      const parts = [`date=${encodeURIComponent(dateKey)}`, "limit=10000"];
-      const base = historyQueryBase();
-      if (base) parts.unshift(base);
-      const r = await fetch(`${API}/api/history?${parts.join("&")}`);
-      const data = await r.json();
-      archive = data.messages || [];
-      const total = data.total ?? archive.length;
-      renderArchive();
-      if (dateKey) scanHomologate({ date: dateKey });
-      if (total > archive.length) {
-        els.archiveMeta.textContent +=
-          ` · mostrando ${archive.length} de ${total} (usa filtros para acotar)`;
-      }
+      await loadArchiveHours(dateKey);
+      await openArchiveTail(0);
     } catch (e) {
       els.archiveMeta.textContent = String(e);
     }
@@ -1276,6 +1470,9 @@
     if (archiveSelectedDate) {
       await loadArchiveDay(archiveSelectedDate);
     } else {
+      archive = [];
+      archiveHours = [];
+      archiveTotal = 0;
       renderArchive();
     }
   }
@@ -1483,8 +1680,14 @@
   els.btnExportHistory.addEventListener("click", () =>
     exportHistory((els.historyExportKind && els.historyExportKind.value) || "json")
   );
-  els.filterDir.addEventListener("change", renderHistory);
-  els.filterType.addEventListener("change", renderHistory);
+  els.filterDir.addEventListener("change", () => {
+    if (historyOpen) openHistoryHour(historyOpen, 0);
+    else loadHistory();
+  });
+  els.filterType.addEventListener("change", () => {
+    if (historyOpen) openHistoryHour(historyOpen, 0);
+    else loadHistory();
+  });
   if (els.serialView) els.serialView.addEventListener("change", renderSerial);
   if (els.historyView) els.historyView.addEventListener("change", renderHistory);
 
@@ -1497,8 +1700,12 @@
     const v = els.archiveDate.value;
     if (v) loadArchiveDay(v);
   });
-  els.archiveDir.addEventListener("change", renderArchive);
-  els.archiveType.addEventListener("change", renderArchive);
+  els.archiveDir.addEventListener("change", () => {
+    if (archiveSelectedDate) loadArchiveDay(archiveSelectedDate);
+  });
+  els.archiveType.addEventListener("change", () => {
+    if (archiveSelectedDate) loadArchiveDay(archiveSelectedDate);
+  });
   if (els.archiveView) els.archiveView.addEventListener("change", renderArchive);
   els.btnExportArchive.addEventListener("click", () =>
     exportArchive((els.archiveExportKind && els.archiveExportKind.value) || "json")
@@ -1564,11 +1771,30 @@
     if (els.sentMeta) els.sentMeta.textContent = "Cargando envíos…";
     const p = new URLSearchParams();
     if (els.sentSource && els.sentSource.value !== "all") p.set("source", els.sentSource.value);
-    p.set("limit", "500");
+    if (els.sentStatus && els.sentStatus.value !== "all") p.set("status", els.sentStatus.value);
+    if (els.sentFrom && els.sentFrom.value) p.set("date_from", els.sentFrom.value);
+    if (els.sentTo && els.sentTo.value) p.set("date_to", els.sentTo.value);
+    p.set("limit", String(PAGE));
+    p.set("skip", String(sentSkip));
     try {
       const r = await fetch(`${API}/api/homologate/sent?${p}`);
       const data = await r.json();
+      sentTotal = data.total || 0;
       renderSent(data.items || [], data);
+      if (els.sentCount) els.sentCount.textContent = String(sentTotal);
+      if (els.sentMeta) {
+        const from = sentTotal ? sentSkip + 1 : 0;
+        const shown = (data.items || []).length;
+        const to = Math.min(sentSkip + shown, sentTotal || shown);
+        const range = (els.sentFrom && els.sentFrom.value) || (els.sentTo && els.sentTo.value)
+          ? ` · ${els.sentFrom.value || "…"} → ${els.sentTo.value || "…"}`
+          : " · últimas 100";
+        els.sentMeta.textContent =
+          `${from}–${to} de ${sentTotal}${range}` +
+          (data.host ? ` · ${data.host}` : "");
+      }
+      if (els.btnSentPrev) els.btnSentPrev.disabled = sentSkip <= 0;
+      if (els.btnSentNext) els.btnSentNext.disabled = sentSkip + PAGE >= sentTotal;
     } catch (e) {
       if (els.sentMeta) els.sentMeta.textContent = String(e);
     }
@@ -1583,9 +1809,34 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
-  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
-  if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
-  if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", () => {
+    sentSkip = 0;
+    loadSent();
+  });
+  if (els.sentStatus) els.sentStatus.addEventListener("change", () => {
+    sentSkip = 0;
+    loadSent();
+  });
+  if (els.sentSource) els.sentSource.addEventListener("change", () => {
+    sentSkip = 0;
+    loadSent();
+  });
+  if (els.sentFrom) els.sentFrom.addEventListener("change", () => {
+    sentSkip = 0;
+    loadSent();
+  });
+  if (els.sentTo) els.sentTo.addEventListener("change", () => {
+    sentSkip = 0;
+    loadSent();
+  });
+  if (els.btnSentPrev) els.btnSentPrev.addEventListener("click", () => {
+    sentSkip = Math.max(0, sentSkip - PAGE);
+    loadSent();
+  });
+  if (els.btnSentNext) els.btnSentNext.addEventListener("click", () => {
+    sentSkip += PAGE;
+    loadSent();
+  });
 
   const MODE_ES = {
     chilled: "Refrigerado",
