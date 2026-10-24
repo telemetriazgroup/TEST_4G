@@ -144,6 +144,14 @@
         <h2>Dispositivos</h2>
         <span id="devCount" class="badge">0</span>
       </div>
+      <form id="pollGeneral" class="poll-general">
+        <label>Consulta JSON
+          <input id="pollMinutes" type="number" min="1" max="60" step="1" value="1" aria-label="Minutos para todos" />
+          min
+        </label>
+        <button type="submit" class="btn ghost">Todos</button>
+        <p id="pollHint" class="meta">Cada equipo usa este lapso, salvo el que tenga minutos propios.</p>
+      </form>
       <ul id="deviceList" class="device-list"></ul>
       <p id="emptyDevices" class="empty">Ningún equipo conectado</p>
     </aside>

@@ -126,6 +126,15 @@ class DecodeBody(BaseModel):
     query: str | None = None
 
 
+class PollGeneralBody(BaseModel):
+    minutes: int
+
+
+class PollImeiBody(BaseModel):
+    imei: str
+    minutes: int | None = None
+
+
 class ComandoBody(BaseModel):
     ident: str = "POLLO_BEBE"
     addr: str | None = None
@@ -702,6 +711,39 @@ async def _tk_one_cycle(addr: str, ip: str, session_id: str | None, known_imei: 
     return "ok" if http_status else "error"
 
 
+def _clean_imei(raw: str | None) -> str:
+    imei = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    if len(imei) < 8 or len(imei) > 20:
+        raise HTTPException(400, "IMEI no válido")
+    return imei
+
+
+async def _tk_schedule() -> dict[str, Any]:
+    general = 1
+    doc = await db.tk_intervals.find_one({"_id": "general"}, {"minutes": 1})
+    if doc:
+        try:
+            general = homo.parse_poll_minutes(doc.get("minutes"))
+        except ValueError:
+            general = 1
+    cursor = db.tk_intervals.find({"kind": "imei"}, {"minutes": 1})
+    overrides = []
+    async for row in cursor:
+        try:
+            minutes = homo.parse_poll_minutes(row.get("minutes"))
+        except ValueError:
+            continue
+        overrides.append({"imei": str(row["_id"]), "minutes": minutes})
+    overrides.sort(key=lambda row: row["imei"])
+    return {"minutes": general, "overrides": overrides}
+
+
+async def _tk_period_s(imei: str | None) -> float:
+    schedule = await _tk_schedule()
+    overrides = {row["imei"]: row["minutes"] for row in schedule["overrides"]}
+    return float(homo.poll_minutes_for(schedule["minutes"], overrides, imei) * 60)
+
+
 def _tk_lock(addr: str) -> asyncio.Lock:
     lock = _tk_locks.get(addr)
     if lock is None:
@@ -735,9 +777,20 @@ async def _tk_poll_loop(addr: str, ip: str, session_id: str | None) -> None:
             except Exception:
                 log.exception("tk poll %s", addr)
                 result = "error"
-            rest = homo.TK_PERIOD_S - (time.monotonic() - cycle)
-            if rest > 0:
-                await asyncio.sleep(rest)
+            while True:
+                dev_now = await db.devices.find_one(
+                    {"addr": addr}, {"is_connected": 1, "imei": 1}
+                )
+                if not dev_now or not dev_now.get("is_connected"):
+                    return
+                if not tk_probe.autosend_allowed(addr in _tk_hold):
+                    await asyncio.sleep(0.4)
+                    continue
+                period = await _tk_period_s(dev_now.get("imei"))
+                rest = period - (time.monotonic() - cycle)
+                if rest <= 0:
+                    break
+                await asyncio.sleep(min(5.0, rest))
     except asyncio.CancelledError:
         return
     finally:
@@ -2198,6 +2251,46 @@ async def homologate_queue_clear():
 @app.get("/api/tk/catalog")
 async def tk_catalog():
     return {"commands": tk_analysis.catalog()}
+
+
+@app.get("/api/tk/intervals")
+async def tk_intervals():
+    return await _tk_schedule()
+
+
+@app.put("/api/tk/intervals")
+async def tk_intervals_general(body: PollGeneralBody):
+    try:
+        minutes = homo.parse_poll_minutes(body.minutes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await db.tk_intervals.update_one(
+        {"_id": "general"},
+        {"$set": {"minutes": minutes, "kind": "general"}},
+        upsert=True,
+    )
+    log.info("tk intervalo general %s min", minutes)
+    return await _tk_schedule()
+
+
+@app.put("/api/tk/intervals/imei")
+async def tk_intervals_imei(body: PollImeiBody):
+    imei = _clean_imei(body.imei)
+    if body.minutes is None:
+        await db.tk_intervals.delete_one({"_id": imei, "kind": "imei"})
+        log.info("tk intervalo %s vuelve al general", imei)
+        return await _tk_schedule()
+    try:
+        minutes = homo.parse_poll_minutes(body.minutes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await db.tk_intervals.update_one(
+        {"_id": imei},
+        {"$set": {"minutes": minutes, "kind": "imei"}},
+        upsert=True,
+    )
+    log.info("tk intervalo %s cada %s min", imei, minutes)
+    return await _tk_schedule()
 
 
 @app.get("/api/tk/targets")

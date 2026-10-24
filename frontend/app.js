@@ -253,6 +253,9 @@
     wsDot: document.getElementById("wsDot"),
     wsLabel: document.getElementById("wsLabel"),
     deviceList: document.getElementById("deviceList"),
+    pollGeneral: document.getElementById("pollGeneral"),
+    pollMinutes: document.getElementById("pollMinutes"),
+    pollHint: document.getElementById("pollHint"),
     emptyDevices: document.getElementById("emptyDevices"),
     emptySerial: document.getElementById("emptySerial"),
     emptyHistory: document.getElementById("emptyHistory"),
@@ -1494,12 +1497,46 @@
   }
 
   // ---- Devices ----
+  let pollSchedule = { minutes: 1, overrides: {} };
+
+  function applyPollSchedule(data) {
+    pollSchedule = {
+      minutes: Number(data.minutes) || 1,
+      overrides: {},
+    };
+    (data.overrides || []).forEach((row) => {
+      if (row.imei) pollSchedule.overrides[row.imei] = Number(row.minutes);
+    });
+    if (els.pollMinutes && document.activeElement !== els.pollMinutes) {
+      els.pollMinutes.value = String(pollSchedule.minutes);
+    }
+  }
+
+  async function loadPollSchedule() {
+    const r = await fetch(`${API}/api/tk/intervals`);
+    if (!r.ok) return;
+    applyPollSchedule(await r.json());
+  }
+
+  async function savePollSchedule(body, perImei) {
+    const r = await fetch(`${API}/api/tk/intervals${perImei ? "/imei" : ""}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se guardó el intervalo");
+    applyPollSchedule(data);
+  }
+
   async function loadDevices() {
     try {
-      const [r, tk] = await Promise.all([
+      const [r, tk, schedule] = await Promise.all([
         fetch(`${API}/api/devices`),
         fetch(`${API}/api/tk/targets`).catch(() => null),
+        fetch(`${API}/api/tk/intervals`).catch(() => null),
       ]);
+      if (schedule && schedule.ok) applyPollSchedule(await schedule.json());
       const data = await r.json();
       const known = tk ? ((await tk.json()).devices || []) : [];
       const byAddr = {};
@@ -1539,12 +1576,49 @@
       const { ip, port } = parseAddr(d.addr);
       const title = d.imei || ip || d.ip || d.addr;
       const where = d.imei ? `${ip || d.ip || ""}:${port ?? "—"}` : `puerto ${port ?? "—"}`;
+      const own = d.imei ? pollSchedule.overrides[d.imei] : null;
+      const shown = own || pollSchedule.minutes;
       li.innerHTML =
         `<div class="ip">${esc(title)}</div>` +
         `<div class="meta">${esc(where)}` +
         (d.session_id ? ` · ses ${esc(String(d.session_id).slice(0, 8))}` : "") +
-        `</div>`;
+        `</div>` +
+        (d.imei
+          ? `<div class="imei-poll">` +
+            `<span class="${own ? "own" : ""}">${own ? "propio" : "general"}</span>` +
+            `<input type="number" min="1" max="60" step="1" value="${esc(shown)}" aria-label="Minutos de este IMEI" />` +
+            `<span>min</span>` +
+            `<button type="button" class="btn ghost imei-save">Este</button>` +
+            (own ? `<button type="button" class="btn ghost imei-clear">General</button>` : "") +
+            `</div>`
+          : `<div class="imei-poll">sin IMEI · usa el general</div>`);
       li.addEventListener("click", () => selectDevice(d));
+      const box = li.querySelector(".imei-poll");
+      if (box) box.addEventListener("click", (ev) => ev.stopPropagation());
+      const save = li.querySelector(".imei-save");
+      if (save) {
+        save.addEventListener("click", async () => {
+          const input = li.querySelector("input");
+          const minutes = Number(input.value);
+          try {
+            await savePollSchedule({ imei: d.imei, minutes }, true);
+            renderDevices(devices);
+          } catch (err) {
+            if (els.pollHint) els.pollHint.textContent = err.message;
+          }
+        });
+      }
+      const clear = li.querySelector(".imei-clear");
+      if (clear) {
+        clear.addEventListener("click", async () => {
+          try {
+            await savePollSchedule({ imei: d.imei, minutes: null }, true);
+            renderDevices(devices);
+          } catch (err) {
+            if (els.pollHint) els.pollHint.textContent = err.message;
+          }
+        });
+      }
       els.deviceList.appendChild(li);
     }
 
@@ -1640,6 +1714,20 @@
   }
 
   // ---- Send ----
+  if (els.pollGeneral) {
+    els.pollGeneral.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const minutes = Number(els.pollMinutes.value);
+      try {
+        await savePollSchedule({ minutes }, false);
+        if (els.pollHint) els.pollHint.textContent = `Todos los equipos sin valor propio: cada ${pollSchedule.minutes} min.`;
+        await loadDevices();
+      } catch (err) {
+        if (els.pollHint) els.pollHint.textContent = err.message;
+      }
+    });
+  }
+
   els.sendForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!selected) {

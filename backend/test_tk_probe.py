@@ -2,7 +2,7 @@
 
 import asyncio
 
-from homologate import TK_CMD_D02, TK_CMD_D03
+from homologate import TK_CMD_D02, TK_CMD_D03, parse_poll_minutes, poll_minutes_for
 from tk_analysis import BY_ID, build_frame, decode_pasted
 from tk_probe import autosend_allowed, run_probe
 
@@ -20,6 +20,31 @@ def _value(decoded, name):
         if row["name"] == name:
             return row["value"]
     raise AssertionError(name)
+
+
+def test_poll_minutes_general_and_per_imei():
+    assert parse_poll_minutes(1) == 1
+    assert parse_poll_minutes("4") == 4
+    try:
+        parse_poll_minutes(0)
+        raise AssertionError("cero")
+    except ValueError:
+        pass
+    try:
+        parse_poll_minutes(61)
+        raise AssertionError("61")
+    except ValueError:
+        pass
+    own = {
+        "869387065275625": 3,
+        "869387065275548": 2,
+        "869387065334482": 4,
+    }
+    assert poll_minutes_for(1, own, None) == 1
+    assert poll_minutes_for(1, own, "869387065333990") == 1
+    assert poll_minutes_for(1, own, "869387065275625") == 3
+    assert poll_minutes_for(1, own, "869387065275548") == 2
+    assert poll_minutes_for(1, own, "869387065334482") == 4
 
 
 def test_catalog_matches_cycle_commands():
@@ -117,6 +142,7 @@ def test_probe_decodes_and_does_not_build_post():
 
 
 if __name__ == "__main__":
+    test_poll_minutes_general_and_per_imei()
     test_catalog_matches_cycle_commands()
     test_hold_stops_autosend()
     test_trip_clock_and_unit_mode()

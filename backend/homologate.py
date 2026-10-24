@@ -34,6 +34,29 @@ TK_CMD_D02 = "1B0204000082A71000CAE91B04"
 TK_CMD_D03 = "1B0204000082A71001DAC81B04"
 TK_GAP_S = 5.0
 TK_PERIOD_S = 60.0
+POLL_MINUTES_MIN = 1
+POLL_MINUTES_MAX = 60
+
+
+def parse_poll_minutes(value: Any) -> int:
+    """Minutos entre las dos consultas que arman el JSON. De 1 a 60."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("el intervalo debe ser un número de minutos")
+    if minutes < POLL_MINUTES_MIN or minutes > POLL_MINUTES_MAX:
+        raise ValueError(
+            f"el intervalo va de {POLL_MINUTES_MIN} a {POLL_MINUTES_MAX} minutos"
+        )
+    return minutes
+
+
+def poll_minutes_for(general: int, overrides: dict[str, int], imei: str | None) -> int:
+    """Minutos de este IMEI, o el general si no tiene valor propio."""
+    key = "".join(ch for ch in str(imei or "") if ch.isdigit())
+    if key and key in overrides:
+        return int(overrides[key])
+    return int(general)
 
 
 def env_url() -> str:
