@@ -268,6 +268,17 @@
     encoding: document.getElementById("encoding"),
     addCrLf: document.getElementById("addCrLf"),
     sendHint: document.getElementById("sendHint"),
+    btnConnectTx: document.getElementById("btnConnectTx"),
+    connectTxModal: document.getElementById("connectTxModal"),
+    connectTxForm: document.getElementById("connectTxForm"),
+    connectTxIp: document.getElementById("connectTxIp"),
+    connectTxEnc: document.getElementById("connectTxEnc"),
+    connectTxMessage: document.getElementById("connectTxMessage"),
+    connectTxCrlf: document.getElementById("connectTxCrlf"),
+    connectTxState: document.getElementById("connectTxState"),
+    connectTxList: document.getElementById("connectTxList"),
+    connectTxClear: document.getElementById("connectTxClear"),
+    connectTxClose: document.getElementById("connectTxClose"),
     btnSweep: document.getElementById("btnSweep"),
     btnRefreshSerial: document.getElementById("btnRefreshSerial"),
     btnClearSerial: document.getElementById("btnClearSerial"),
@@ -1409,6 +1420,7 @@
         if (msg.type === "seguimiento" && activeTab === "status") {
           if (!statusSelectedDate || msg.date === statusSelectedDate) loadSeguimiento();
         }
+        if (msg.type === "connect_tx") refreshConnectTx();
         if (msg.type === "comando" && (activeTab === "cmd" || activeTab === "reglas")) {
           if (activeTab === "cmd") loadComandos();
           if (activeTab === "reglas") loadReglas();
@@ -1455,6 +1467,115 @@
       els.sendHint.textContent = String(err);
     }
   });
+
+  let connectTxRows = [];
+
+  function connectTxStatus(row) {
+    if (!row) return "Sin comando listo para esta IP.";
+    if (row.status === "armed" && row.error) return `Sigue listo. El último intento falló: ${row.error}`;
+    if (row.status === "armed") return `Listo desde ${row.armed_at || "ahora"}. Sale al conectar ${row.ip}.`;
+    if (row.status === "sending") return `Enviando a ${row.ip}…`;
+    if (row.status === "sent") return `Enviado a ${row.sent_addr || row.ip}${row.sent_at ? " · " + row.sent_at : ""}`;
+    return row.status || "";
+  }
+
+  function renderConnectTx() {
+    const armed = connectTxRows.filter((row) => row.status === "armed" || row.status === "sending");
+    if (els.btnConnectTx) els.btnConnectTx.textContent = armed.length ? `Al conectar · ${armed.length}` : "Al conectar";
+    const ip = (els.connectTxIp && els.connectTxIp.value || "").trim();
+    const mine = connectTxRows.find((row) => row.ip === ip);
+    if (els.connectTxState) els.connectTxState.textContent = connectTxStatus(mine);
+    if (!els.connectTxList) return;
+    els.connectTxList.innerHTML = "";
+    connectTxRows.forEach((row) => {
+      const li = document.createElement("li");
+      const mark = row.status === "armed" ? "listo" : row.status === "sent" ? "enviado" : row.status;
+      li.innerHTML = `<span class="${row.status === "armed" ? "armed" : ""}">${esc(mark)}</span> ${esc(row.ip)} · ${esc(row.encoding)} · ${esc(row.message)}`;
+      li.addEventListener("click", () => {
+        els.connectTxIp.value = row.ip || "";
+        els.connectTxEnc.value = row.encoding || "hex";
+        els.connectTxMessage.value = row.message || "";
+        els.connectTxCrlf.checked = false;
+        renderConnectTx();
+      });
+      els.connectTxList.appendChild(li);
+    });
+  }
+
+  async function refreshConnectTx() {
+    try {
+      const r = await fetch(`${API}/api/connect-tx`);
+      if (!r.ok) return;
+      const data = await r.json();
+      connectTxRows = data.commands || [];
+      renderConnectTx();
+    } catch (err) {
+      console.warn(err);
+    }
+  }
+
+  function openConnectTx() {
+    if (selected && selected.ip && els.connectTxIp) els.connectTxIp.value = selected.ip;
+    if (els.connectTxModal) els.connectTxModal.hidden = false;
+    refreshConnectTx();
+  }
+
+  if (els.btnConnectTx) els.btnConnectTx.addEventListener("click", openConnectTx);
+  if (els.connectTxClose) {
+    els.connectTxClose.addEventListener("click", () => {
+      els.connectTxModal.hidden = true;
+    });
+  }
+  if (els.connectTxModal) {
+    els.connectTxModal.addEventListener("click", (ev) => {
+      if (ev.target === els.connectTxModal) els.connectTxModal.hidden = true;
+    });
+  }
+  if (els.connectTxIp) els.connectTxIp.addEventListener("input", renderConnectTx);
+  if (els.connectTxForm) {
+    els.connectTxForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        const r = await fetch(`${API}/api/connect-tx`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ip: els.connectTxIp.value.trim(),
+            message: els.connectTxMessage.value,
+            encoding: els.connectTxEnc.value,
+            crlf: els.connectTxCrlf.checked,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+          els.connectTxState.textContent = data.detail || "no se pudo dejar listo";
+          return;
+        }
+        els.connectTxCrlf.checked = false;
+        await refreshConnectTx();
+      } catch (err) {
+        els.connectTxState.textContent = String(err);
+      }
+    });
+  }
+  if (els.connectTxClear) {
+    els.connectTxClear.addEventListener("click", async () => {
+      const ip = els.connectTxIp.value.trim();
+      if (!ip) return;
+      try {
+        const r = await fetch(`${API}/api/connect-tx?ip=${encodeURIComponent(ip)}`, { method: "DELETE" });
+        const data = await r.json();
+        if (!r.ok) {
+          els.connectTxState.textContent = data.detail || "no se pudo quitar";
+          return;
+        }
+        await refreshConnectTx();
+      } catch (err) {
+        els.connectTxState.textContent = String(err);
+      }
+    });
+  }
+  refreshConnectTx();
 
   els.btnClearSerial.addEventListener("click", () => {
     live = selected ? live.filter((m) => m.addr !== selected.addr) : [];

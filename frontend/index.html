@@ -187,8 +187,9 @@
           +CRLF
         </label>
         <button type="submit" class="btn primary">Enviar</button>
+        <button type="button" id="btnConnectTx" class="btn ghost">Al conectar</button>
       </form>
-      <p id="sendHint" class="hint">Selecciona un dispositivo (IP:puerto) para enviar o exportar.</p>
+      <p id="sendHint" class="hint">Enviar sale ahora al puerto de la sesión. Al conectar deja el comando listo para la IP.</p>
     </section>
 
     <!-- HISTÓRICO POR HORA -->
@@ -513,6 +514,37 @@
       <p id="reglasMeta" class="hint">PANTALLA_CMD · acciones temporizadas · no reemplaza MP-5000 ni SET_RELE · motores = 4 analógicas RELAY</p>
     </section>
   </main>
+
+  <div id="connectTxModal" class="modal" hidden>
+    <form id="connectTxForm" class="modal-card">
+      <h2>Comando al conectar</h2>
+      <p class="hint">Queda listo para esa IP. Sale una vez, cuando el equipo abre la conexión. El puerto puede cambiar; la IP es la misma.</p>
+      <label>IP
+        <input id="connectTxIp" type="text" inputmode="decimal" placeholder="190.187.158.12" autocomplete="off" required />
+      </label>
+      <label>Codificación
+        <select id="connectTxEnc" aria-label="Codificación del comando">
+          <option value="hex">Hexadecimal</option>
+          <option value="string">String</option>
+          <option value="int">Int</option>
+        </select>
+      </label>
+      <label>Comando
+        <input id="connectTxMessage" type="text" placeholder="Trama HEX" autocomplete="off" required />
+      </label>
+      <label class="chk">
+        <input id="connectTxCrlf" type="checkbox" />
+        +CRLF
+      </label>
+      <p id="connectTxState" class="hint">Sin comando listo para esta IP.</p>
+      <div class="cmd-row">
+        <button type="button" id="connectTxClear" class="btn ghost">Quitar</button>
+        <button type="button" id="connectTxClose" class="btn ghost">Cerrar</button>
+        <button type="submit" class="btn primary">Dejar listo</button>
+      </div>
+      <ul id="connectTxList" class="connect-tx-list"></ul>
+    </form>
+  </div>
   </div>
 
   <script src="app.js"></script>

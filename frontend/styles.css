@@ -931,6 +931,54 @@ body.is-client .layout { display: none; }
   margin: 0 1rem;
 }
 
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(18, 24, 32, 0.45);
+}
+.modal[hidden] { display: none !important; }
+.modal-card {
+  width: min(420px, 100%);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem 1.1rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.modal-card h2 { margin: 0; font-size: 1.05rem; }
+.modal-card .hint { margin: 0; }
+.modal-card label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.82rem; }
+.modal-card input[type="text"],
+.modal-card select {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.connect-tx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 8rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+.connect-tx-list li {
+  padding: 0.28rem 0;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+.connect-tx-list .armed { color: var(--accent); font-weight: 600; }
+
 .btn {
   font-family: var(--font-ui);
   font-weight: 600;

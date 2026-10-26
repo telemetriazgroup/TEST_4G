@@ -27,6 +27,7 @@ from bson import ObjectId
 
 import client_api as capi
 import comandos as cmdb
+import connect_tx
 import decode_rs
 import decode_tk
 import homologate as homo
@@ -72,6 +73,13 @@ class SendBody(BaseModel):
     encoding: str = Field(default="hex", description="string | hex | int")
     addr: str | None = None
     ip: str | None = None
+
+
+class ConnectTxBody(BaseModel):
+    ip: str
+    message: str
+    encoding: str = "hex"
+    crlf: bool = False
 
 
 class TelemetryBody(BaseModel):
@@ -325,6 +333,7 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.connect_tx.update_many({"status": "sending"}, {"$set": {"status": "armed"}})
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
@@ -398,6 +407,7 @@ async def internal_connect(body: ConnectBody):
             "tcp_header": body.tcp_header,
         }
     )
+    await _fire_connect_tx(body.ip, body.addr, session_id)
     return {"ok": True, "session_id": session_id}
 
 
@@ -2057,6 +2067,128 @@ async def get_history(
         "limit": limit,
         "date": date,
     }
+
+
+def _connect_tx_view(doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ip": doc.get("_id"),
+        "message": doc.get("message"),
+        "encoding": doc.get("encoding"),
+        "crlf": bool(doc.get("crlf")),
+        "status": doc.get("status"),
+        "armed_at": doc.get("armed_at"),
+        "sent_at": doc.get("sent_at"),
+        "sent_addr": doc.get("sent_addr"),
+        "error": doc.get("error"),
+        "bytes": doc.get("bytes"),
+    }
+
+
+async def _fire_connect_tx(ip: str, addr: str, session_id: str | None) -> None:
+    """Si hay un comando listo para esta IP, lo manda una vez por el socket nuevo."""
+    try:
+        key = connect_tx.clean_ipv4(ip)
+    except ValueError:
+        return
+    doc = await db.connect_tx.find_one_and_update(
+        {"_id": key, "status": "armed"},
+        {"$set": {"status": "sending"}},
+    )
+    if not doc:
+        return
+    payload = {
+        "message": doc.get("prepared") or doc.get("message"),
+        "encoding": doc.get("encoding") or "hex",
+        "addr": addr,
+        "ip": key,
+    }
+    data: dict[str, Any] | None = None
+    last_err = "send falló"
+    for _ in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http:
+                r = await http.post(f"{BRIDGE_URL}/send", json=payload)
+                data = r.json()
+        except Exception as exc:
+            data = None
+            last_err = str(exc)
+        if data and data.get("ok"):
+            break
+        last_err = (data or {}).get("error") or last_err
+        await asyncio.sleep(0.25)
+    now = _now()
+    if data and data.get("ok"):
+        await db.connect_tx.update_one(
+            {"_id": key},
+            {
+                "$set": {
+                    "status": "sent",
+                    "sent_at": now,
+                    "sent_addr": data.get("addr") or addr,
+                    "session_id": session_id,
+                    "error": None,
+                    "bytes": data.get("bytes"),
+                    "hex": data.get("hex"),
+                }
+            },
+        )
+        await broadcast({"type": "connect_tx", "action": "sent", "ip": key, "addr": data.get("addr") or addr})
+        log.info("connect-tx enviado %s → %s", key, addr)
+        return
+    await db.connect_tx.update_one(
+        {"_id": key},
+        {"$set": {"status": "armed", "error": last_err, "last_try_at": now}},
+    )
+    await broadcast({"type": "connect_tx", "action": "error", "ip": key, "error": last_err})
+    log.warning("connect-tx sigue listo %s: %s", key, last_err)
+
+
+@app.get("/api/connect-tx")
+async def connect_tx_list():
+    rows = await db.connect_tx.find({}).sort("armed_at", -1).to_list(40)
+    return {"commands": [_connect_tx_view(row) for row in rows]}
+
+
+@app.put("/api/connect-tx")
+async def connect_tx_arm(body: ConnectTxBody):
+    try:
+        ip = connect_tx.clean_ipv4(body.ip)
+        prepared, encoding = connect_tx.prepare_connect_message(body.message, body.encoding, body.crlf)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    now = _now()
+    await db.connect_tx.update_one(
+        {"_id": ip},
+        {
+            "$set": {
+                "message": prepared,
+                "prepared": prepared,
+                "encoding": encoding,
+                "crlf": bool(body.crlf),
+                "status": "armed",
+                "armed_at": now,
+                "error": None,
+                "sent_at": None,
+                "sent_addr": None,
+            }
+        },
+        upsert=True,
+    )
+    log.info("connect-tx listo %s (%s)", ip, encoding)
+    doc = await db.connect_tx.find_one({"_id": ip})
+    await broadcast({"type": "connect_tx", "action": "armed", "ip": ip})
+    return _connect_tx_view(doc or {"_id": ip})
+
+
+@app.delete("/api/connect-tx")
+async def connect_tx_clear(ip: str):
+    try:
+        key = connect_tx.clean_ipv4(ip)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await db.connect_tx.delete_one({"_id": key})
+    await broadcast({"type": "connect_tx", "action": "cleared", "ip": key})
+    return {"ok": True, "ip": key}
 
 
 @app.post("/api/send")
