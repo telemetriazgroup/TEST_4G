@@ -7,10 +7,10 @@ Puente TCP en **9917**, backend MongoDB, frontend tipo monitor serial (string/he
 ```
 Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │                  │
-                         HTTP:19801           WS + REST
+                         HTTP:19802           WS + REST
                          (send/list)             │
                                                  ▼
-                                    frontend:19601 (superadmin)
+                                    frontend:19602 (superadmin)
                                     ztrack:8451    (admin / monitor)
 ```
 
@@ -26,7 +26,7 @@ Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ─�
 
 ## Arranque (Docker)
 
-Esta rama es **`madurador_miami_30_10_2026`** (TCP **9917**, N=7, HTTP K=1: serial 19601 / backend 19701 / bridge 19801). Origen: `test-gasificado`. No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914), `test-tk` (9915), `test-gasificado` (9916) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
+Esta rama es **`madurador_miami_30_10_2026`** (TCP **9917**, N=7, HTTP K=2: serial 19602 / backend 19702 / bridge 19802). Origen: `test-gasificado`. No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914), `test-tk` (9915), `test-gasificado` (9916) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
 
 ```bash
 docker compose up --build -d
@@ -35,9 +35,9 @@ docker compose up --build -d
 | Servicio   | URL / puerto      |
 |------------|-------------------|
 | Ztrack     | http://localhost:8451 |
-| Superadmin | http://localhost:19601 |
-| Backend    | http://localhost:19701 |
-| Bridge HTTP| http://localhost:19801 |
+| Superadmin | http://localhost:19602 |
+| Backend    | http://localhost:19702 |
+| Bridge HTTP| http://localhost:19802 |
 | TCP equipos| `host:9917`       |
 | MongoDB    | localhost:29024   |
 
@@ -53,16 +53,16 @@ Base y volumen propios de este stack (`mongo_data_9917`). No reutiliza `test_4g`
 
 ```bash
 # Sesiones por IP
-curl 'http://localhost:19701/api/sessions?ip=1.2.3.4'
+curl 'http://localhost:19702/api/sessions?ip=1.2.3.4'
 # Mensajes de una IP
-curl 'http://localhost:19701/api/messages?ip=1.2.3.4&limit=100'
+curl 'http://localhost:19702/api/messages?ip=1.2.3.4&limit=100'
 # Histórico
-curl 'http://localhost:19701/api/history?ip=1.2.3.4'
+curl 'http://localhost:19702/api/history?ip=1.2.3.4'
 ```
 
 ## Uso del monitor
 
-1. Abre http://localhost:19601
+1. Abre http://localhost:19602
 2. Los equipos que abran TCP a `:9917` aparecen en la lista (solo conexiones reales).
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.
@@ -71,15 +71,15 @@ curl 'http://localhost:19701/api/history?ip=1.2.3.4'
 
 ```bash
 # Dispositivos vivos
-curl http://localhost:19801/devices
+curl http://localhost:19802/devices
 
 # Enviar string
-curl -X POST http://localhost:19701/api/send \
+curl -X POST http://localhost:19702/api/send \
   -H 'Content-Type: application/json' \
   -d '{"ip":"1.2.3.4","message":"AT\r\n","encoding":"string"}'
 
 # Enviar hex
-curl -X POST http://localhost:19701/api/send \
+curl -X POST http://localhost:19702/api/send \
   -H 'Content-Type: application/json' \
   -d '{"addr":"1.2.3.4:54321","message":"48656C6C6F","encoding":"hex"}'
 ```

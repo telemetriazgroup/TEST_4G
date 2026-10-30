@@ -7,13 +7,13 @@ Delega al bridge completo en tcp_bridge/bridge.py, que cumple:
   - hilo por accept() → handle_client
   - register_pending / limpieza de IPs huérfanas
   - recv(4096) → buffer → líneas → parse_chunks → backend
-  - envío string/hex vía HTTP :19801
+  - envío string/hex vía HTTP :19802
 
 Uso local (sin Docker):
   pip install -r tcp_bridge/requirements.txt -r backend/requirements.txt
   # terminal 1: mongodb
-  # terminal 2: uvicorn backend.main:app --port 19701
-  # terminal 3: BACKEND_URL=http://127.0.0.1:19701 python test_9910.py
+  # terminal 2: uvicorn backend.main:app --port 19702
+  # terminal 3: BACKEND_URL=http://127.0.0.1:19702 python test_9910.py
 """
 
 import os
@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tcp_bridge"))
 
 # Compat: APIs legacy activables con FORWARD_LEGACY=1
 os.environ.setdefault("TCP_PORT", "9917")
-os.environ.setdefault("HTTP_PORT", "19801")
-os.environ.setdefault("BACKEND_URL", os.getenv("BACKEND_URL", "http://127.0.0.1:19701"))
+os.environ.setdefault("HTTP_PORT", "19802")
+os.environ.setdefault("BACKEND_URL", os.getenv("BACKEND_URL", "http://127.0.0.1:19702"))
 
 from bridge import main  # noqa: E402
 

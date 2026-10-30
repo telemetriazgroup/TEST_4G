@@ -22,11 +22,11 @@ services:
   backend:
     build: ./backend
     ports:
-      - "19701:19701"
+      - "19702:19702"
     environment:
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: test_4g_9917
-      BRIDGE_URL: http://tcp_bridge:19801
+      BRIDGE_URL: http://tcp_bridge:19802
       HOMOLOGATE_URL: ${HOMOLOGATE_URL:-}
       HOMOLOGATE_UNIT: ${HOMOLOGATE_UNIT:-UNIT111}
       HOMOLOGATE_TIMEOUT_S: ${HOMOLOGATE_TIMEOUT_S:-5}
@@ -43,11 +43,11 @@ services:
     build: ./tcp_bridge
     ports:
       - "9917:9917"
-      - "19801:19801"
+      - "19802:19802"
     environment:
       TCP_PORT: "9917"
-      HTTP_PORT: "19801"
-      BACKEND_URL: http://backend:19701
+      HTTP_PORT: "19802"
+      BACKEND_URL: http://backend:19702
       IDLE_TIMEOUT_S: "300"
       ORPHAN_SWEEP_S: "30"
       FORWARD_LEGACY: "0"
@@ -61,7 +61,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "19601:19601"
+      - "19602:19602"
     depends_on:
       - backend
     restart: unless-stopped
@@ -72,7 +72,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ""
-        VITE_SERIAL_URL: http://localhost:19601
+        VITE_SERIAL_URL: http://localhost:19602
     ports:
       - "8451:8451"
     depends_on:
@@ -81,3 +81,12 @@ services:
 
 volumes:
   mongo_data_9917:
+
+# Subred fija: en servidores con muchos stacks el pool default de Docker se agota
+# ("all predefined address pools have been fully subnetted").
+networks:
+  default:
+    name: test_4g_madurador_miami_default
+    ipam:
+      config:
+        - subnet: 10.102.7.0/24

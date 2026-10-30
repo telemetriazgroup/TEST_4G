@@ -126,9 +126,9 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 |---------|--------|
 | Proyecto Compose | `test_4g_madurador_miami` |
 | TCP dispositivo | **9917** |
-| Bridge HTTP | 19801 |
-| Backend | 19701 |
-| Superadmin serial | 19601 |
+| Bridge HTTP | 19802 |
+| Backend | 19702 |
+| Superadmin serial | 19602 |
 | Ztrack | 8451 |
 | Mongo host | 29024 → 27017 |
 | Base Mongo | `test_4g_9917` |
@@ -148,7 +148,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9921` |
 | Volumen | `mongo_data_9921` (Compose lo nombra `test_4g_usa_9921_mongo_data_9921`) |
 
-Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (K=0). Madurador Miami → **9917** (K=1: serial 19601 / backend 19701 / bridge 19801). USA 9921 → **9921**. Las URLs no se mezclan.
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (K=0). Madurador Miami → **9917** (K=2: serial 19602 / backend 19702 / bridge 19802). USA 9921 → **9921**. Las URLs no se mezclan.
 
 A partir de `test-gasificado`, las ramas **nuevas** ya no usan 8081+N / 9081+N / 8089+N. Usan `19600+K` / `19700+K` / `19800+K` ([ram_tcp.md](./ram_tcp.md) §2b). Lo ya creado se deja en el historial.
 

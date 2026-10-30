@@ -71,11 +71,11 @@ N=11 (`test_usa_9921`, histórico): TCP **9921**, bridge **8092**, backend **909
 
 Los HTTP `8081+N` / `9081+N` / `8089+N` chocan entre sí (p. ej. bridge N=11 = serial N=3 = 8092). A partir de **esta** rama se usa otra serie. El TCP sigue siendo `9910 + N`. Ztrack y Mongo host siguen `8444 + N` y `29017 + N`.
 
-| Recurso | Fórmula nueva | K=0 gasificado | K=1 madurador miami | K=2 |
+| Recurso | Fórmula nueva | K=0 gasificado | K=1 (usa/ocupado) | K=2 madurador miami |
 |---------|---------------|----------------|----------------------|-----|
-| Superadmin serial | `19600 + K` | **19600** | **19601** | 19602 |
-| Backend | `19700 + K` | **19700** | **19701** | 19702 |
-| Bridge HTTP | `19800 + K` | **19800** | **19801** | 19802 |
+| Superadmin serial | `19600 + K` | **19600** | 19601 | **19602** |
+| Backend | `19700 + K` | **19700** | 19701 | **19702** |
+| Bridge HTTP | `19800 + K` | **19800** | 19801 | **19802** |
 
 | Recurso (sin cambio de serie) | Fórmula | Gasificado (N=6, K=0) |
 |-------------------------------|---------|------------------------|
@@ -391,9 +391,9 @@ Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checko
 
 ---
 
-## 14. Rama `madurador_miami_30_10_2026` (TCP 9917) — hecho (N=7, K=1)
+## 14. Rama `madurador_miami_30_10_2026` (TCP 9917) — hecho (N=7, K=2)
 
-Siguiente TCP libre secuencial tras gasificado 9916: **9917**. Siguiente HTTP nuevo tras K=0: **K=1**. Origen: `test-gasificado` (la rama origen **no** se elimina). Slug Compose `madurador_miami`.
+Siguiente TCP libre secuencial tras gasificado 9916: **9917**. Siguiente HTTP nuevo tras K=0/K=1 ocupados: **K=2**. Origen: `test-gasificado` (la rama origen **no** se elimina). Slug Compose `madurador_miami`.
 
 | Recurso | Valor madurador miami |
 |---------|------------------------|
@@ -401,15 +401,18 @@ Siguiente TCP libre secuencial tras gasificado 9916: **9917**. Siguiente HTTP nu
 | Carpeta | `/home/telemetriazgroup/Proyectos/madurador_miami/TEST_4G` |
 | `name:` | `test_4g_madurador_miami` |
 | TCP | **9917** |
-| Bridge HTTP | **19801** |
-| Backend | http://localhost:19701 |
-| Serial | http://localhost:19601 |
+| Bridge HTTP | **19802** |
+| Backend | http://localhost:19702 |
+| Serial | http://localhost:19602 |
 | Ztrack | http://localhost:8451 |
 | Mongo host | 29024 → 27017 |
 | `MONGO_DB` | `test_4g_9917` |
 | Volumen | `mongo_data_9917` |
 | `CLEAN_PORT` | 9917 |
 | Contenedores | `test_4g_madurador_miami-*` |
+| Red Compose | `test_4g_madurador_miami_default` · subnet fija **10.102.7.0/24** |
+
+Si al hacer `docker compose up` aparece `all predefined address pools have been fully subnetted`, el pool bridge del daemon está lleno. No bajar otros stacks: liberar redes huérfanas (`docker network prune`) o dejar subnet fija en el compose (arriba). Serie sugerida para ramas nuevas: `10.102.<N>.0/24`.
 
 ---
 
@@ -422,25 +425,25 @@ Entrada:
 - Rama Git: madurador_miami_30_10_2026
 - Slug Compose: madurador_miami
 - Offset N: 7
-- Offset K: 1
+- Offset K: 2
 - Rama origen: test-gasificado
 - Carpeta: /home/telemetriazgroup/Proyectos/madurador_miami/TEST_4G
 - TCP: 9917
 
 Haz esto, en orden:
-1. Confirma la carpeta y la rama. Si no existe, créala desde test-gasificado (worktree o clone). No borres test-gasificado. Si 9917, 19801, 19701, 19601, 8451 o 29024 ya están ocupados, PARA y avisa. No uses 8443.
-2. Estamos en N=7, K=1. Deja TODOS los binds/defaults en el mapa madurador:
+1. Confirma la carpeta y la rama. Si no existe, créala desde test-gasificado (worktree o clone). No borres test-gasificado. Si 9917, 19802, 19702, 19602, 8451 o 29024 ya están ocupados, PARA y avisa. No uses 8443.
+2. Estamos en N=7, K=2. Deja TODOS los binds/defaults en el mapa madurador:
    - name: test_4g_madurador_miami
-   - TCP 9917, bridge 19801, backend 19701, serial 19601, ztrack 8451, mongo host 29024:27017
+   - TCP 9917, bridge 19802, backend 19702, serial 19602, ztrack 8451, mongo host 29024:27017
    - MONGO_DB=test_4g_9917
    - volumen mongo_data_9917
    - CLEAN_PORT=9917
-   - VITE_SERIAL_URL y links de UI a :19601 y :8451
+   - VITE_SERIAL_URL y links de UI a :19602 y :8451
    Mongo interno se queda en 27017. No reescribas dumps JSON ni hex 82A7. No remapees HTTP de ramas históricas ni de gasificado.
 3. Archivos de ram_tcp.md sección 4. docker-compose.yml debe quedar name: test_4g_madurador_miami.
-4. Actualiza README.md, contexto.md, multiples_puertos.md y la tabla de ram_tcp.md (madurador = N=7 K=1, hecho).
+4. Actualiza README.md, contexto.md, multiples_puertos.md y la tabla de ram_tcp.md (madurador = N=7 K=2, hecho).
 5. docker compose up -d --build SOLO en esta carpeta. No hagas down de test-gasificado ni de los otros stacks.
-6. Verifica: curl http://localhost:19701/api/health → db test_4g_9917; contenedores test_4g_madurador_miami-*; ss -lnt | grep 9917; serial :19601 y ztrack :8451 responden; gasificado :9916/:19600 sigue arriba.
+6. Verifica: curl http://localhost:19702/api/health → db test_4g_9917; contenedores test_4g_madurador_miami-*; ss -lnt | grep 9917; serial :19602 y ztrack :8451 responden; gasificado :9916/:19600 sigue arriba.
 7. Al terminar entrega la tabla de puertos madurador y deja test-gasificado intacta.
 
 Regla: una rama = una carpeta = un name Compose = un TCP = una Mongo. Git checkout no aísla Docker.
