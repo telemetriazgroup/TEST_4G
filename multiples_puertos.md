@@ -13,6 +13,7 @@ Hoy:
 | `test-starcool` | otra carpeta (starcool) | TCP **9914** |
 | `test-tk` | otra carpeta (tk) | TCP **9915** — [ram_tcp.md](./ram_tcp.md) §9–10 |
 | `test-gasificado` | otra carpeta (gasificado) | TCP **9916** — [ram_tcp.md](./ram_tcp.md) §12–13 |
+| `madurador_miami_30_10_2026` | otra carpeta (madurador miami) | TCP **9917** — [ram_tcp.md](./ram_tcp.md) §14–15 |
 | `test_usa_9921` | otra carpeta (usa 9921) | TCP **9921** — [ram_tcp.md](./ram_tcp.md) §11 |
 
 Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puertos del host y volúmenes. Si dos carpetas se llaman `TEST_4G` y el compose no declara `name:`, las dos se llaman proyecto `test_4g` y se pisan.
@@ -105,7 +106,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9915` |
 | Volumen | `mongo_data_9915` (Compose lo nombra `test_4g_tk_mongo_data_9915`) |
 
-### `test-gasificado` — TCP 9916 (esta rama)
+### `test-gasificado` — TCP 9916
 
 | Recurso | Valor |
 |---------|--------|
@@ -118,6 +119,20 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Mongo host | 29023 → 27017 |
 | Base Mongo | `test_4g_9916` |
 | Volumen | `mongo_data_9916` (Compose lo nombra `test_4g_gasificado_mongo_data_9916`) |
+
+### `madurador_miami_30_10_2026` — TCP 9917 (esta rama)
+
+| Recurso | Valor |
+|---------|--------|
+| Proyecto Compose | `test_4g_madurador_miami` |
+| TCP dispositivo | **9917** |
+| Bridge HTTP | 19801 |
+| Backend | 19701 |
+| Superadmin serial | 19601 |
+| Ztrack | 8451 |
+| Mongo host | 29024 → 27017 |
+| Base Mongo | `test_4g_9917` |
+| Volumen | `mongo_data_9917` (Compose lo nombra `test_4g_madurador_miami_mongo_data_9917`) |
 
 ### `test_usa_9921` — TCP 9921
 
@@ -133,7 +148,7 @@ Docker **no entiende de ramas Git**. Solo ve: nombre de proyecto Compose, puerto
 | Base Mongo | `test_4g_9921` |
 | Volumen | `mongo_data_9921` (Compose lo nombra `test_4g_usa_9921_mongo_data_9921`) |
 
-Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (HTTP nuevo: serial 19600 / backend 19700 / bridge 19800). USA 9921 → **9921**. Las URLs no se mezclan.
+Pollo → **9910**. Saasa → **9911**. Carne → **9912**. USA → **9913**. Starcool → **9914**. TK → **9915**. Gasificado → **9916** (K=0). Madurador Miami → **9917** (K=1: serial 19601 / backend 19701 / bridge 19801). USA 9921 → **9921**. Las URLs no se mezclan.
 
 A partir de `test-gasificado`, las ramas **nuevas** ya no usan 8081+N / 9081+N / 8089+N. Usan `19600+K` / `19700+K` / `19800+K` ([ram_tcp.md](./ram_tcp.md) §2b). Lo ya creado se deja en el historial.
 
