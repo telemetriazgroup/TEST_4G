@@ -2,7 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 
+import control as ctrl
 from homologate import (
+    FrameAssembler,
     LevelGuard,
     build_standard,
     classify_frame,
@@ -137,6 +139,121 @@ def test_level_guard_ignores_spike_before_slope():
     assert second["corrected"] is False
 
 
+D1 = "1B0204000082A700AA"
+D2 = "1B0204000082A701BB"
+IMEI = "869387065279607"
+
+
+def _semi(field: str, value: str) -> str:
+    return f'{IMEI}{{"i":"MAD000","{field}";"{value}"}}'
+
+
+def test_group_posts_termoking_shape():
+    asm = FrameAssembler()
+    t0 = datetime(2026, 11, 12, 0, 0, 28, tzinfo=timezone.utc)
+    assert asm.push(t0, _semi("d02", D2), None) is None
+    assert asm.push(t0 + timedelta(seconds=2), _semi("d01", D1), None) is None
+    payload = asm.push(
+        t0 + timedelta(seconds=10),
+        f'{IMEI}{{"i":"MAD000","rs":"PGet:1"}}',
+        114.6,
+    )
+    assert payload == {
+        "i": IMEI,
+        "d1": D1,
+        "d2": D2,
+        "d3": "1 32516 1051 0 0 0 114.6",
+        "d4": "UNIT111",
+    }
+
+
+def test_group_does_not_mix_after_20s():
+    asm = FrameAssembler()
+    t0 = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    asm.push(t0, _semi("d01", D1), None)
+    asm.push(t0, _semi("d02", D2), None)
+    assert asm.push(t0 + timedelta(seconds=25), f"{IMEI}PPM:1", 114.6) is None
+
+
+def test_control_doses_only_below_two_percent():
+    state, hit = ctrl.decide(None, now=1_000.0, level=120.0, setpoint=130.0)
+    assert hit["send"] is True
+    assert hit["tx"].startswith("RELE(1,")
+    assert 1 <= hit["n"] <= 20
+    assert state.get("last_dose_t") is None
+    state = ctrl.commit_tx({**state, "pending": {"n": hit["n"], "tx": hit["tx"]}}, 1_000.0)
+    _, near = ctrl.decide(state, now=1_200.0, level=129.0, setpoint=130.0)
+    assert near["send"] is False
+    _, above = ctrl.decide(None, now=1_000.0, level=131.0, setpoint=130.0)
+    assert above["send"] is False
+    _, wait = ctrl.decide(state, now=1_030.0, level=119.0, setpoint=130.0)
+    assert wait["send"] is False
+    assert "espera" in wait["reason"]
+
+
+def test_control_tx_only_after_server_get_and_ack():
+    imei = "869387065279607"
+    state, armed = ctrl.on_frame(
+        None,
+        now=1_000.0,
+        text=f'{imei}{{"rs":"PGet:1"}}',
+        level=120.0,
+        setpoint=130.0,
+    )
+    assert armed["armed"] is True
+    assert armed["send"] is False
+    assert state["pending"]["tx"].startswith("RELE(1,")
+    held, other = ctrl.on_frame(
+        state,
+        now=1_001.0,
+        text=f"{imei}PPM:120.0",
+        level=None,
+        setpoint=130.0,
+    )
+    assert other is None
+    assert held["pending"]["tx"] == state["pending"]["tx"]
+    ready, order = ctrl.on_frame(
+        held,
+        now=1_002.0,
+        text=f"{imei}Server_Get",
+        level=None,
+        setpoint=130.0,
+    )
+    assert order["kind"] == "tx"
+    assert order["send"] is True
+    assert order["tx"] == held["pending"]["tx"]
+    sent = ctrl.commit_tx(ready, 1_002.0)
+    assert "pending" not in sent
+    assert sent["awaiting"]["n"] == order["n"]
+    _, again = ctrl.on_frame(
+        sent,
+        now=1_008.0,
+        text=f"{imei}Server_Get",
+        level=None,
+        setpoint=130.0,
+    )
+    assert again is None
+    done, ack = ctrl.on_frame(
+        sent,
+        now=1_003.0,
+        text=f"{imei}SET_RELE 1 -> {order['n']} OK",
+        level=None,
+        setpoint=130.0,
+    )
+    assert ack["ack"] is True
+    assert ack["ack_text"] == f"SET_RELE 1 -> {order['n']} OK"
+    assert "awaiting" not in done
+    mismatch_state = ctrl.commit_tx(ready, 1_002.0)
+    _, bad = ctrl.on_frame(
+        mismatch_state,
+        now=1_004.0,
+        text=f"{imei}SET_RELE 1 -> 99 OK",
+        level=None,
+        setpoint=130.0,
+    )
+    assert bad["ack"] is False
+
+
 def test_history_window_lima_hour():
     start, end = history_window("2026-11-11 19:00")
     assert start.startswith("2026-11-12T00:00:00")
@@ -153,5 +270,9 @@ if __name__ == "__main__":
     test_level_guard_replaces_spike_with_slope()
     test_level_guard_keeps_a_real_dose_step()
     test_level_guard_ignores_spike_before_slope()
+    test_group_posts_termoking_shape()
+    test_group_does_not_mix_after_20s()
+    test_control_doses_only_below_two_percent()
+    test_control_tx_only_after_server_get_and_ack()
     test_history_window_lima_hour()
     print("ok")

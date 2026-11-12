@@ -136,6 +136,14 @@
       Reglas
       <small>IF / ELSE · acciones con tiempo</small>
     </button>
+    <button type="button" class="tab" data-tab="config" role="tab" aria-selected="false">
+      Configuración
+      <small>link del POST</small>
+    </button>
+    <button type="button" class="tab" data-tab="control" role="tab" aria-selected="false">
+      Control
+      <small>objetivo · RELE(1,N)</small>
+    </button>
   </nav>
 
   <main class="layout">
@@ -512,6 +520,68 @@
         </fieldset>
       </div>
       <p id="reglasMeta" class="hint">PANTALLA_CMD · acciones temporizadas · no reemplaza MP-5000 ni SET_RELE · motores = 4 analógicas RELAY</p>
+    </section>
+
+    <section class="panel monitor tab-panel" id="panelConfig">
+      <div class="panel-head">
+        <h2>Configuración</h2>
+        <button type="button" id="btnSaveSettings" class="btn primary">Guardar</button>
+      </div>
+      <div class="cmd-card">
+        <label>Link del POST
+          <input id="cfgUrl" type="url" placeholder="http://161.132.53.51:9051/TermoKing/" />
+        </label>
+        <p class="help">Cada grupo de 20 s (d01, d02 y el nivel) se envía aquí en JSON.</p>
+        <label class="chk">
+          <input id="cfgEnabled" type="checkbox" checked />
+          Enviar al link
+        </label>
+        <label>d4
+          <input id="cfgUnit" type="text" value="UNIT111" />
+        </label>
+      </div>
+      <p id="cfgMeta" class="hint">—</p>
+    </section>
+
+    <section class="panel monitor tab-panel" id="panelControl">
+      <div class="panel-head">
+        <h2>Control del nivel</h2>
+        <button type="button" id="btnSaveControl" class="btn primary">Guardar</button>
+        <button type="button" id="btnRefreshControl" class="btn ghost">Actualizar</button>
+      </div>
+      <div class="cmd-card">
+        <label>Objetivo
+          <input id="ctlSetpoint" type="number" step="0.1" min="1" max="500" value="130" />
+        </label>
+        <p class="help">La dosis se arma cuando el nivel está un 2% por debajo. Sale por TX solo al llegar un RX Server_Get. El equipo confirma con SET_RELE 1 -&gt; N OK.</p>
+        <label class="chk">
+          <input id="ctlEnabled" type="checkbox" />
+          Control activo
+        </label>
+        <p id="ctlNow" class="hint">—</p>
+      </div>
+      <div class="hours-wrap">
+        <table class="capture-table">
+          <thead>
+            <tr>
+              <th>Hora</th>
+              <th>Nivel</th>
+              <th>Objetivo</th>
+              <th>Error</th>
+              <th>P</th>
+              <th>I</th>
+              <th>D</th>
+              <th>N</th>
+              <th>TX</th>
+              <th>Confirmación</th>
+              <th>Por qué</th>
+            </tr>
+          </thead>
+          <tbody id="ctlBody"></tbody>
+        </table>
+      </div>
+      <p id="emptyControl" class="empty show">Aún no hay decisiones. Activa el control: la orden espera un RX Server_Get.</p>
+      <p id="ctlMeta" class="hint">—</p>
     </section>
   </main>
 

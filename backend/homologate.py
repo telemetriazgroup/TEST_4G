@@ -30,18 +30,47 @@ LEVEL_MAX = 350.0
 # Una muestra buena se mueve menos de 8 en ~35 s. 15 deja pasar la dosis y corta el pico.
 LEVEL_BAND = 15.0
 LEVEL_SAMPLE_S = 35.0
+GROUP_WINDOW_S = 20.0
+D3_PREFIX = "1 32516 1051 0 0 0"
+IMEI_RE = re.compile(r"^(\d{14,16})")
 
 
 def env_enabled() -> bool:
+    if "enabled" in _runtime:
+        return bool(_runtime["enabled"])
     raw = (os.getenv("HOMOLOGATE_ENABLED", "1") or "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 
+DEFAULT_URL = "http://161.132.53.51:9051/TermoKing/"
+_runtime: dict[str, Any] = {}
+
+
+def set_runtime(
+    *,
+    url: str | None = None,
+    enabled: bool | None = None,
+    unit: str | None = None,
+) -> None:
+    """Valores guardados desde la interfaz. Pisan el entorno."""
+    if url is not None:
+        _runtime["url"] = url.strip()
+    if enabled is not None:
+        _runtime["enabled"] = bool(enabled)
+    if unit is not None:
+        _runtime["unit"] = unit.strip()
+
+
 def env_url() -> str:
-    return (os.getenv("HOMOLOGATE_URL", "") or "").strip()
+    if "url" in _runtime:
+        return str(_runtime["url"] or "").strip()
+    raw = (os.getenv("HOMOLOGATE_URL", "") or "").strip()
+    return raw or DEFAULT_URL
 
 
 def env_unit() -> str:
+    if _runtime.get("unit"):
+        return str(_runtime["unit"]).strip()
     return (os.getenv("HOMOLOGATE_UNIT", "UNIT111") or "UNIT111").strip() or "UNIT111"
 
 
@@ -279,6 +308,89 @@ class LevelGuard:
         self.points.append((t, value))
         self.points = self.points[-6:]
         return {"raw": raw, "value": value, "corrected": True, "reason": reason}
+
+
+def loose_object(text: str | None) -> dict[str, Any] | None:
+    """JSON de la trama aunque el equipo mande punto y coma en vez de dos puntos."""
+    raw = str(text or "")
+    start = raw.find("{")
+    if start < 0:
+        return None
+    objs = split_json_objects(raw[start:].replace('";', '":'))
+    return objs[0] if objs else None
+
+
+def parse_piece(text: str | None) -> dict[str, Any]:
+    raw = str(text or "").lstrip()
+    imei_m = IMEI_RE.match(raw)
+    obj = loose_object(raw) or {}
+
+    def field_hex(name: str) -> str:
+        for key, value in obj.items():
+            if isinstance(key, str) and key.lower() == name and isinstance(value, str):
+                return normalize_hex(value)
+        return ""
+
+    d1 = field_hex("d01")
+    d2 = field_hex("d02")
+    if OP_SENSOR not in d1:
+        d1 = ""
+    if OP_CONTROL not in d2:
+        d2 = ""
+    imei = imei_m.group(1) if imei_m else ""
+    if not imei:
+        ident = str(obj.get("i") or "")
+        if ident.isdigit() and len(ident) >= 14:
+            imei = ident
+    return {"imei": imei, "d1": d1, "d2": d2}
+
+
+class FrameAssembler:
+    """Junta d01, d02 y el nivel de PGet si caen en la misma ventana de 20 s."""
+
+    def __init__(self) -> None:
+        self.t0: float | None = None
+        self.imei = ""
+        self.d1 = ""
+        self.d2 = ""
+        self.level: float | None = None
+
+    def reset(self) -> None:
+        self.t0 = None
+        self.imei = ""
+        self.d1 = ""
+        self.d2 = ""
+        self.level = None
+
+    def push(self, ts: Any, text: str | None, level: float | None) -> dict[str, Any] | None:
+        piece = parse_piece(text)
+        useful = bool(piece["d1"] or piece["d2"] or level is not None)
+        if not useful:
+            return None
+        t = _epoch(ts)
+        if self.t0 is not None and t - self.t0 > GROUP_WINDOW_S:
+            self.reset()
+        if self.t0 is None:
+            self.t0 = t
+        if piece["imei"]:
+            self.imei = piece["imei"]
+        if piece["d1"]:
+            self.d1 = piece["d1"]
+        if piece["d2"]:
+            self.d2 = piece["d2"]
+        if level is not None:
+            self.level = float(level)
+        if not (self.imei and self.d1 and self.d2 and self.level is not None):
+            return None
+        payload = {
+            "i": self.imei,
+            "d1": self.d1,
+            "d2": self.d2,
+            "d3": f"{D3_PREFIX} {self.level:.1f}",
+            "d4": env_unit(),
+        }
+        self.reset()
+        return payload
 
 
 def build_standard(obj: dict[str, Any], unit: str | None = None) -> dict[str, Any] | None:

@@ -749,6 +749,8 @@ body.is-client .layout { display: none; }
   border-radius: 4px;
   width: 7rem;
 }
+#cfgUrl { width: min(36rem, 100%); font-family: var(--font-mono); }
+#panelConfig label, #panelControl label { display: block; margin: 0.45rem 0; }
 .cmd-preview {
   display: block;
   font-family: var(--font-mono);

@@ -358,6 +358,18 @@
     btnRefreshCmd: document.getElementById("btnRefreshCmd"),
     btnClearCmd: document.getElementById("btnClearCmd"),
     panelReglas: document.getElementById("panelReglas"),
+    panelConfig: document.getElementById("panelConfig"),
+    panelControl: document.getElementById("panelControl"),
+    cfgUrl: document.getElementById("cfgUrl"),
+    cfgEnabled: document.getElementById("cfgEnabled"),
+    cfgUnit: document.getElementById("cfgUnit"),
+    cfgMeta: document.getElementById("cfgMeta"),
+    ctlSetpoint: document.getElementById("ctlSetpoint"),
+    ctlEnabled: document.getElementById("ctlEnabled"),
+    ctlNow: document.getElementById("ctlNow"),
+    ctlBody: document.getElementById("ctlBody"),
+    ctlMeta: document.getElementById("ctlMeta"),
+    emptyControl: document.getElementById("emptyControl"),
     reglasTitle: document.getElementById("reglasTitle"),
     reglasOnline: document.getElementById("reglasOnline"),
     reglasBanner: document.getElementById("reglasBanner"),
@@ -588,10 +600,11 @@
   }
 
   // ---- Tabs ----
-  document.querySelectorAll(".tab").forEach((btn) => {
+  document.querySelectorAll("#shellSerial .tab").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (!btn.dataset.tab) return;
       activeTab = btn.dataset.tab;
-      document.querySelectorAll(".tab").forEach((b) => {
+      document.querySelectorAll("#shellSerial .tab").forEach((b) => {
         const on = b === btn;
         b.classList.toggle("active", on);
         b.setAttribute("aria-selected", on ? "true" : "false");
@@ -603,12 +616,16 @@
       if (els.panelStatus) els.panelStatus.classList.toggle("active", activeTab === "status");
       if (els.panelCmd) els.panelCmd.classList.toggle("active", activeTab === "cmd");
       if (els.panelReglas) els.panelReglas.classList.toggle("active", activeTab === "reglas");
+      if (els.panelConfig) els.panelConfig.classList.toggle("active", activeTab === "config");
+      if (els.panelControl) els.panelControl.classList.toggle("active", activeTab === "control");
       if (activeTab === "history") loadHistory();
       if (activeTab === "archive") loadArchiveTab();
       if (activeTab === "sent") loadSent();
       if (activeTab === "status") loadSeguimiento();
       if (activeTab === "cmd") loadComandos();
       if (activeTab === "reglas") loadReglas();
+      if (activeTab === "config") loadSettings();
+      if (activeTab === "control") loadControl();
     });
   });
 
@@ -3093,9 +3110,126 @@
     }
   });
 
+  async function putSettings(body) {
+    const r = await fetch(`${API}/api/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || "no se guardó");
+    return data;
+  }
+
+  async function loadSettings() {
+    if (!els.cfgUrl) return;
+    const r = await fetch(`${API}/api/settings`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se leyó la configuración");
+    els.cfgUrl.value = data.url || "";
+    els.cfgEnabled.checked = !!data.enabled;
+    els.cfgUnit.value = data.unit || "UNIT111";
+    if (els.ctlSetpoint) els.ctlSetpoint.value = data.setpoint ?? 130;
+    if (els.ctlEnabled) els.ctlEnabled.checked = !!data.control_enabled;
+    if (els.cfgMeta) {
+      els.cfgMeta.textContent = data.host
+        ? `Destino actual: ${data.host}` + (data.enabled ? "" : " · envío apagado")
+        : "Sin link. No hay POST.";
+    }
+    return data;
+  }
+
+  function controlAck(it) {
+    if (it.ack_text) return it.ack_text;
+    if (it.sent) return "enviado, sin SET_RELE";
+    if (it.armed) return "espero Server_Get";
+    return "—";
+  }
+
+  function renderControl(items) {
+    if (!els.ctlBody) return;
+    els.ctlBody.innerHTML = "";
+    if (els.emptyControl) els.emptyControl.classList.toggle("show", items.length === 0);
+    const last = items[0];
+    if (els.ctlNow) {
+      els.ctlNow.textContent = last
+        ? `Último nivel ${last.level} · objetivo ${last.setpoint} · ${last.reason || ""}`
+        : "Sin lecturas de control todavía.";
+    }
+    for (const it of items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+        `<td class="mono">${esc(it.level)}</td>` +
+        `<td class="mono">${esc(it.setpoint)}</td>` +
+        `<td class="mono">${esc(it.error)}</td>` +
+        `<td class="mono">${esc(it.p)}</td>` +
+        `<td class="mono">${esc(it.i)}</td>` +
+        `<td class="mono">${esc(it.d)}</td>` +
+        `<td class="mono">${esc(it.n)}</td>` +
+        `<td class="mono">${esc(it.tx || "—")}</td>` +
+        `<td class="mono">${esc(controlAck(it))}</td>` +
+        `<td>${esc(it.reason || it.send_error || "")}</td>`;
+      els.ctlBody.appendChild(tr);
+    }
+    if (els.ctlMeta) els.ctlMeta.textContent = `${items.length} decisión(es)`;
+  }
+
+  async function loadControl() {
+    const r = await fetch(`${API}/api/control/log?limit=40`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se leyó el control");
+    renderControl(data.items || []);
+  }
+
+  const btnSaveSettings = document.getElementById("btnSaveSettings");
+  if (btnSaveSettings) {
+    btnSaveSettings.addEventListener("click", async () => {
+      try {
+        const data = await putSettings({
+          url: els.cfgUrl.value.trim(),
+          enabled: !!els.cfgEnabled.checked,
+          unit: (els.cfgUnit.value || "").trim() || "UNIT111",
+        });
+        els.cfgMeta.textContent = data.host ? `Guardado · ${data.host}` : "Guardado · sin link";
+        refreshHomoQueue();
+      } catch (e) {
+        els.cfgMeta.textContent = String(e);
+      }
+    });
+  }
+  const btnSaveControl = document.getElementById("btnSaveControl");
+  if (btnSaveControl) {
+    btnSaveControl.addEventListener("click", async () => {
+      try {
+        const data = await putSettings({
+          control_enabled: !!els.ctlEnabled.checked,
+          setpoint: Number(els.ctlSetpoint.value),
+        });
+        els.ctlMeta.textContent = data.control_enabled
+          ? `Control activo · objetivo ${data.setpoint} · TX al llegar Server_Get`
+          : "Control apagado";
+      } catch (e) {
+        els.ctlMeta.textContent = String(e);
+      }
+    });
+  }
+  const btnRefreshControl = document.getElementById("btnRefreshControl");
+  if (btnRefreshControl) {
+    btnRefreshControl.addEventListener("click", () => loadControl().catch((e) => {
+      if (els.ctlMeta) els.ctlMeta.textContent = String(e);
+    }));
+  }
+
   connectWs();
   loadDevices();
   refreshSerial();
   refreshHomoQueue();
+  loadSettings().catch((e) => { if (els.cfgMeta) els.cfgMeta.textContent = String(e); });
   setInterval(loadDevices, 10000);
+  setInterval(() => {
+    if (activeTab === "control") {
+      loadControl().catch((e) => { if (els.ctlMeta) els.ctlMeta.textContent = String(e); });
+    }
+  }, 5000);
 })();

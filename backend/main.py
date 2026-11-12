@@ -28,6 +28,7 @@ from bson import ObjectId
 import client_api as capi
 import comandos as cmdb
 import connect_tx
+import control as ctrl
 import decode_rs
 import decode_tk
 import homologate as homo
@@ -155,6 +156,14 @@ class HomologateEnqueueBody(BaseModel):
     addr: str | None = None
     ip: str | None = None
     ids: list[str] | None = None
+
+
+class RuntimeSettingsBody(BaseModel):
+    url: str | None = None
+    enabled: bool | None = None
+    unit: str | None = None
+    control_enabled: bool | None = None
+    setpoint: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +342,9 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.control_log.create_index([("ts", -1)])
     await db.connect_tx.update_many({"status": "sending"}, {"$set": {"status": "armed"}})
+    await _load_runtime_settings()
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
@@ -427,6 +438,48 @@ async def internal_disconnect(body: dict):
 
 
 _level_by_ip: dict[str, homo.LevelGuard] = {}
+_assemblers: dict[str, homo.FrameAssembler] = {}
+_control_state: dict[str, dict[str, Any]] = {}
+
+
+def _settings_view() -> dict[str, Any]:
+    return {
+        "url": homo.env_url(),
+        "enabled": homo.env_enabled(),
+        "unit": homo.env_unit(),
+        "host": homo.destination_host(),
+        "control_enabled": bool(homo._runtime.get("control_enabled")),
+        "setpoint": float(homo._runtime.get("setpoint") or 130),
+    }
+
+
+async def _load_runtime_settings() -> None:
+    doc = await db.settings.find_one({"_id": "runtime"}) or {}
+    url = doc.get("url")
+    if url is None:
+        url = homo.env_url()
+    enabled = doc.get("enabled")
+    if enabled is None:
+        enabled = True
+    unit = doc.get("unit") or homo.env_unit()
+    homo.set_runtime(url=str(url), enabled=bool(enabled), unit=str(unit))
+    homo._runtime["control_enabled"] = bool(doc.get("control_enabled"))
+    try:
+        homo._runtime["setpoint"] = float(doc.get("setpoint") if doc.get("setpoint") is not None else 130)
+    except (TypeError, ValueError):
+        homo._runtime["setpoint"] = 130.0
+    if not doc:
+        await db.settings.update_one(
+            {"_id": "runtime"},
+            {"$set": {
+                "url": homo.env_url(),
+                "enabled": True,
+                "unit": homo.env_unit(),
+                "control_enabled": False,
+                "setpoint": 130.0,
+            }},
+            upsert=True,
+        )
 
 
 def _stamp_level(doc: dict[str, Any]) -> None:
@@ -579,9 +632,250 @@ async def _post_standard(payload: dict[str, Any]) -> tuple[int | None, str | Non
     return None, last_err
 
 
+def _group_key(doc: dict[str, Any]) -> str:
+    return str(doc.get("ip") or doc.get("addr") or "")
+
+
+def _push_group(doc: dict[str, Any]) -> dict[str, Any] | None:
+    if (doc.get("direction") or "rx").lower() != "rx":
+        return None
+    if (doc.get("value_type") or "") == "tcp_header":
+        return None
+    key = _group_key(doc)
+    asm = _assemblers.get(key)
+    if asm is None:
+        asm = homo.FrameAssembler()
+        _assemblers[key] = asm
+    level = doc.get("level")
+    try:
+        level_f = float(level) if level is not None else None
+    except (TypeError, ValueError):
+        level_f = None
+    return asm.push(doc.get("ts"), doc.get("text"), level_f)
+
+
+async def _post_grouped(doc: dict[str, Any], payload: dict[str, Any]) -> None:
+    payload_hash = homo.payload_hash(payload)
+    url = homo.env_url()
+    if not homo.env_enabled() or not url:
+        await _mark_message(
+            doc,
+            {
+                "homologate_status": "disabled",
+                "homologate_reason": "no_url" if not url else "disabled",
+                "homologate_i": payload.get("i"),
+            },
+        )
+        return
+    if await _recent_duplicate(payload_hash, doc.get("session_id")):
+        await _mark_message(
+            doc,
+            {"homologate_status": "skip", "homologate_reason": "duplicate", "homologate_hash": payload_hash},
+        )
+        return
+    await _mark_message(doc, {"homologate_status": "pending", "homologate_hash": payload_hash})
+    http_status, err = await _post_standard(payload)
+    now = _now()
+    log_doc = {
+        "ts": now,
+        "i": payload.get("i"),
+        "opcodes": ["82A700", "82A701"],
+        "host": homo.destination_host(url),
+        "http_status": http_status,
+        "error": err,
+        "status": "ok" if http_status else "error",
+        "payload_hash": payload_hash,
+        "payload": payload,
+        "hour": homo.hour_key(doc.get("ts")),
+        "session_id": doc.get("session_id"),
+        "addr": doc.get("addr"),
+        "ip": doc.get("ip"),
+        "message_ts": doc.get("ts"),
+        "source": "live",
+    }
+    await db.homologate_log.insert_one(log_doc)
+    if http_status:
+        await _mark_message(
+            doc,
+            {
+                "homologate_status": "ok",
+                "homologate_reason": "sent",
+                "homologate_http": http_status,
+                "homologate_i": payload.get("i"),
+                "homologate_hash": payload_hash,
+            },
+        )
+        log.info(
+            "homologate ok i=%s host=%s http=%s nivel=%s",
+            payload.get("i"),
+            log_doc["host"],
+            http_status,
+            payload.get("d3"),
+        )
+    else:
+        await _mark_message(
+            doc,
+            {
+                "homologate_status": "error",
+                "homologate_reason": err or "post_failed",
+                "homologate_i": payload.get("i"),
+                "homologate_hash": payload_hash,
+            },
+        )
+        log.warning("homologate error i=%s err=%s", payload.get("i"), err)
+
+
+async def _bridge_control_send(ip: str, addr: Any, message: str) -> tuple[bool, str | None]:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            response = await http.post(
+                f"{BRIDGE_URL}/send",
+                json={"ip": ip, "addr": addr, "message": message, "encoding": "string"},
+            )
+            data = response.json()
+        if data.get("ok"):
+            return True, None
+        return False, data.get("error") or "send falló"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _control_row(doc: dict[str, Any], ip: str, event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ts": doc.get("ts") or _now(),
+        "ip": ip,
+        "addr": doc.get("addr"),
+        "kind": event.get("kind"),
+        "sent": bool(event.get("sent")),
+        "armed": bool(event.get("armed")),
+        "ack": event.get("ack"),
+        "ack_text": event.get("ack_text"),
+        "token": event.get("token"),
+        "send_error": event.get("send_error"),
+        "error": event.get("error") if isinstance(event.get("error"), (int, float)) else None,
+        "level": event.get("level"),
+        "setpoint": event.get("setpoint"),
+        "band": event.get("band"),
+        "slope": event.get("slope"),
+        "p": event.get("p"),
+        "i": event.get("i"),
+        "d": event.get("d"),
+        "n": event.get("n"),
+        "tx": event.get("tx"),
+        "reason": event.get("reason"),
+    }
+
+
+async def _stamp_control_ack(token: str | None, ack: bool, ack_text: str | None, ts: str | None) -> bool:
+    if not token:
+        return False
+    updated = await db.control_log.find_one_and_update(
+        {"token": token, "ack": None},
+        {"$set": {"ack": ack, "ack_text": ack_text, "ack_ts": ts or _now()}},
+    )
+    return updated is not None
+
+
+async def _maybe_control(doc: dict[str, Any]) -> None:
+    if not homo._runtime.get("control_enabled"):
+        return
+    if (doc.get("direction") or "rx").lower() != "rx":
+        return
+    if (doc.get("value_type") or "") == "tcp_header":
+        return
+    ip = str(doc.get("ip") or "")
+    if not ip:
+        return
+    try:
+        setpoint = float(homo._runtime.get("setpoint") or 130)
+        now = homo._epoch(doc.get("ts"))
+    except (TypeError, ValueError):
+        return
+    raw_level = doc.get("level")
+    try:
+        level = float(raw_level) if raw_level is not None else None
+    except (TypeError, ValueError):
+        level = None
+
+    state, event = ctrl.on_frame(
+        _control_state.get(ip),
+        now=now,
+        text=str(doc.get("text") or ""),
+        level=level,
+        setpoint=setpoint,
+    )
+    if event is None:
+        _control_state[ip] = state
+        return
+
+    if event.get("kind") == "ack":
+        stamped = await _stamp_control_ack(
+            event.get("token"),
+            bool(event.get("ack")),
+            event.get("ack_text"),
+            doc.get("ts"),
+        )
+        if stamped:
+            state.pop("ack_done", None)
+            state.pop("ack_token", None)
+        _control_state[ip] = state
+        return
+
+    if event.get("kind") == "tx" and event.get("tx"):
+        pending = dict(state.get("pending") or {})
+        token = f"{ip}:{now:.3f}:{pending.get('n')}"
+        event["token"] = token
+        hold = dict(state)
+        hold["awaiting"] = {
+            "n": pending.get("n"),
+            "tx": pending.get("tx"),
+            "token": token,
+            "phase": "sending",
+        }
+        _control_state[ip] = hold
+        sent, error = await _bridge_control_send(ip, doc.get("addr"), str(event["tx"]))
+        fresh = dict(_control_state.get(ip) or {})
+        ack_text = fresh.pop("ack_done", None)
+        fresh.pop("ack_token", None)
+        if sent:
+            fresh["last_dose_t"] = now
+            fresh.pop("pending", None)
+            event["sent"] = True
+            if ack_text:
+                fresh.pop("awaiting", None)
+                event["ack"] = True
+                event["ack_text"] = ack_text
+                event["reason"] = f"tras Server_Get se envió {event['tx']} · {ack_text}"
+            else:
+                fresh["awaiting"] = {"n": pending.get("n"), "tx": pending.get("tx"), "token": token}
+                event["ack"] = None
+                event["reason"] = f"tras Server_Get se envió {event['tx']}"
+        else:
+            waiting = fresh.get("awaiting") or {}
+            if waiting.get("phase") == "sending":
+                fresh.pop("awaiting", None)
+            event["send"] = False
+            event["sent"] = False
+            event["send_error"] = error
+            event["reason"] = f"Server_Get pero no salió {event['tx']}: {error}"
+        _control_state[ip] = fresh
+        await db.control_log.insert_one(_control_row(doc, ip, event))
+        if sent:
+            log.info("control %s ip=%s nivel=%s", event["tx"], ip, event.get("level"))
+        return
+
+    _control_state[ip] = state
+    await db.control_log.insert_one(_control_row(doc, ip, event))
+
+
 async def _homologate_after_persist(doc: dict[str, Any]) -> None:
     """Corre en background: persistencia ya ocurrió."""
     try:
+        await _maybe_control(doc)
+        grouped = _push_group(doc)
+        if grouped:
+            await _post_grouped(doc, grouped)
+            return
         classified = homo.classify_frame(doc)
         status = classified["status"]
         reason = classified["reason"]
@@ -1878,6 +2172,50 @@ async def homologate_candidates(
         "interval_s": homo.env_queue_interval_s(),
         "items": items,
         "queue": _queue_snapshot(),
+    }
+
+
+@app.get("/api/settings")
+async def get_runtime_settings():
+    return _settings_view()
+
+
+@app.put("/api/settings")
+async def put_runtime_settings(body: RuntimeSettingsBody):
+    fields: dict[str, Any] = {}
+    if body.url is not None:
+        url = body.url.strip()
+        if url and not (url.startswith("http://") or url.startswith("https://")):
+            raise HTTPException(400, "la URL debe empezar por http:// o https://")
+        fields["url"] = url
+    if body.enabled is not None:
+        fields["enabled"] = bool(body.enabled)
+    if body.unit is not None:
+        unit = body.unit.strip() or "UNIT111"
+        fields["unit"] = unit[:40]
+    if body.control_enabled is not None:
+        fields["control_enabled"] = bool(body.control_enabled)
+    if body.setpoint is not None:
+        if not (0 < body.setpoint <= 500):
+            raise HTTPException(400, "el objetivo debe estar entre 0 y 500")
+        fields["setpoint"] = float(body.setpoint)
+    if not fields:
+        return _settings_view()
+    await db.settings.update_one({"_id": "runtime"}, {"$set": fields}, upsert=True)
+    await _load_runtime_settings()
+    return _settings_view()
+
+
+@app.get("/api/control/log")
+async def control_log(limit: int = 40):
+    limit = max(1, min(limit, 200))
+    rows = await db.control_log.find({}, {"_id": 0}).sort("ts", -1).to_list(limit)
+    view = _settings_view()
+    return {
+        "items": rows,
+        "control_enabled": view["control_enabled"],
+        "setpoint": view["setpoint"],
+        "count": len(rows),
     }
 
 
