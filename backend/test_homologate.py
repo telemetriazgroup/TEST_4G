@@ -1,6 +1,17 @@
 """Criterios de aceptación de datos_homologar.md (sin Mongo / HTTP)."""
 
-from homologate import build_standard, classify_frame, date_key, hour_key, split_json_objects
+from datetime import datetime, timedelta, timezone
+
+from homologate import (
+    LevelGuard,
+    build_standard,
+    classify_frame,
+    date_key,
+    history_window,
+    hour_key,
+    pget_level,
+    split_json_objects,
+)
 
 SAMPLE_CONCAT = (
     '{"i":"POLLO_BEBE","d01":"1B0204000082A700F600FE7FEB00FB00F200EA00FF7FEF00EF00F000F000F0004300'
@@ -80,10 +91,67 @@ def test_hour_key_lima():
     assert date_key("2026-09-09T15:26:41.752381Z") == "2026-09-09"
 
 
+def test_pget_level_is_field_12():
+    text = (
+        '869387065279607{"i":"MAD000","rs":"PGet:21.5,21.6,18.7,0.0,0.0,22.0,22.7,'
+        '92.0,70.0,2.6,0.3,119.5,150,40,2"}'
+    )
+    assert pget_level(text) == 119.5
+    assert pget_level("869387065279607PGet") is None
+
+
+def test_level_guard_replaces_spike_with_slope():
+    guard = LevelGuard()
+    base = datetime(2026, 11, 12, 0, 32, tzinfo=timezone.utc)
+    seen = []
+    for i, raw in enumerate((118.2, 118.1, 117.5, 915.8, 118.2)):
+        ts = base + timedelta(seconds=35 * i)
+        seen.append(guard.feed(ts, raw))
+    assert seen[0]["reason"] == "ok" and seen[0]["value"] == 118.2
+    assert seen[2]["corrected"] is False
+    assert seen[3]["corrected"] is True
+    assert seen[3]["reason"] == "above_max"
+    assert seen[3]["value"] is not None and seen[3]["value"] < 350
+    assert abs(seen[3]["value"] - 117.0) < 2
+    assert seen[4]["corrected"] is False
+    assert seen[4]["value"] == 118.2
+
+
+def test_level_guard_keeps_a_real_dose_step():
+    guard = LevelGuard()
+    base = datetime(2026, 11, 12, 3, 38, tzinfo=timezone.utc)
+    values = (115.1, 115.1, 115.7, 122.9)
+    out = [guard.feed(base + timedelta(seconds=35 * i), v) for i, v in enumerate(values)]
+    assert all(not row["corrected"] for row in out)
+    assert out[-1]["value"] == 122.9
+
+
+def test_level_guard_ignores_spike_before_slope():
+    guard = LevelGuard()
+    ts = datetime(2026, 11, 12, 0, 0, tzinfo=timezone.utc)
+    first = guard.feed(ts, 915.8)
+    assert first["corrected"] is True
+    assert first["value"] is None
+    second = guard.feed(ts + timedelta(seconds=35), 114.9)
+    assert second["value"] == 114.9
+    assert second["corrected"] is False
+
+
+def test_history_window_lima_hour():
+    start, end = history_window("2026-11-11 19:00")
+    assert start.startswith("2026-11-12T00:00:00")
+    assert end.startswith("2026-11-12T01:00:00")
+
+
 if __name__ == "__main__":
     test_split_concat_does_not_post_rs()
     test_forma_a_standard_payload()
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
     test_hour_key_lima()
+    test_pget_level_is_field_12()
+    test_level_guard_replaces_spike_with_slope()
+    test_level_guard_keeps_a_real_dose_step()
+    test_level_guard_ignores_spike_before_slope()
+    test_history_window_lima_hour()
     print("ok")

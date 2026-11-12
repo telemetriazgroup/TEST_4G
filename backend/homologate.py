@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -22,6 +22,14 @@ OP_CAPTION = "82A703"
 OP_ALARM = "82A706"
 OPS_STANDARD = (OP_SENSOR, OP_CONTROL, OP_ALARM)
 D0X_RE = re.compile(r"^d\d{2}$", re.IGNORECASE)
+PGET_RE = re.compile(r"PGet:([0-9eE.+\-,]+)")
+# Campo 12 de PGet (índice 11). Es el número que entra en d3.
+LEVEL_INDEX = 11
+# Por encima de esto la muestra es basura. Los picos de ~900 caen aquí.
+LEVEL_MAX = 350.0
+# Una muestra buena se mueve menos de 8 en ~35 s. 15 deja pasar la dosis y corta el pico.
+LEVEL_BAND = 15.0
+LEVEL_SAMPLE_S = 35.0
 
 
 def env_enabled() -> bool:
@@ -71,6 +79,22 @@ def env_tz() -> ZoneInfo:
         return ZoneInfo(name)
     except Exception:
         return ZoneInfo("America/Lima")
+
+
+def history_window(hour: str) -> tuple[str, str]:
+    """Inicio y fin UTC de una hora local (YYYY-MM-DD HH:00, zona de operación)."""
+    text = (hour or "").strip()
+    if len(text) < 16 or text[4] != "-" or text[7] != "-" or text[10] != " " or text[13] != ":":
+        raise ValueError("hour debe ser YYYY-MM-DD HH:00")
+    try:
+        start = datetime.fromisoformat(f"{text[:10]}T{text[11:16]}:00").replace(tzinfo=env_tz())
+    except ValueError as exc:
+        raise ValueError("hour debe ser YYYY-MM-DD HH:00") from exc
+    end = start + timedelta(hours=1)
+    return (
+        start.astimezone(timezone.utc).isoformat(),
+        end.astimezone(timezone.utc).isoformat(),
+    )
 
 
 def hour_key(ts: str | None) -> str:
@@ -172,6 +196,89 @@ def index_opcodes(obj: dict[str, Any]) -> dict[str, str]:
 def payload_hash(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def pget_level(text: str | None) -> float | None:
+    """Número de control dentro de PGet, o None si la trama no lo trae."""
+    match = PGET_RE.search(str(text or ""))
+    if not match:
+        return None
+    parts = match.group(1).split(",")
+    if len(parts) <= LEVEL_INDEX:
+        return None
+    try:
+        return float(parts[LEVEL_INDEX])
+    except ValueError:
+        return None
+
+
+def _epoch(ts: Any) -> float:
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.timestamp()
+    raw = str(ts).replace("Z", "+00:00")
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+class LevelGuard:
+    """Sigue la pendiente del nivel y reemplaza la muestra que no encaja.
+
+    Un valor mayor de 350 (los picos de ~900) no entra en la pendiente.
+    Si aún no hay dos muestras buenas, ese pico se ignora. Si ya hay pendiente,
+    la muestra se sustituye por lo que la pendiente anticipaba.
+    """
+
+    def __init__(self) -> None:
+        self.points: list[tuple[float, float]] = []
+
+    def _predict(self, t: float) -> float | None:
+        if not self.points:
+            return None
+        if len(self.points) == 1:
+            return self.points[-1][1]
+        t0, v0 = self.points[-2]
+        t1, v1 = self.points[-1]
+        dt = t1 - t0
+        slope = 0.0 if dt <= 0 else (v1 - v0) / dt
+        if len(self.points) >= 3:
+            ta, va = self.points[-3]
+            dt2 = t0 - ta
+            if dt2 > 0:
+                slope = 0.5 * slope + 0.5 * ((v0 - va) / dt2)
+        return v1 + slope * (t - t1)
+
+    def _band(self, t: float) -> float:
+        if not self.points:
+            return LEVEL_BAND
+        dt = max(1.0, t - self.points[-1][0])
+        return LEVEL_BAND * max(1.0, dt / LEVEL_SAMPLE_S)
+
+    def feed(self, ts: Any, raw: float) -> dict[str, Any]:
+        t = _epoch(ts)
+        reason = ""
+        if raw > LEVEL_MAX:
+            reason = "above_max"
+        else:
+            pred = self._predict(t)
+            if pred is not None and len(self.points) >= 2 and abs(raw - pred) > self._band(t):
+                reason = "off_slope"
+        if not reason:
+            self.points.append((t, raw))
+            self.points = self.points[-6:]
+            return {"raw": raw, "value": raw, "corrected": False, "reason": "ok"}
+        pred = self._predict(t)
+        if pred is None:
+            return {"raw": raw, "value": None, "corrected": True, "reason": reason}
+        value = round(pred, 1)
+        self.points.append((t, value))
+        self.points = self.points[-6:]
+        return {"raw": raw, "value": value, "corrected": True, "reason": reason}
 
 
 def build_standard(obj: dict[str, Any], unit: str | None = None) -> dict[str, Any] | None:

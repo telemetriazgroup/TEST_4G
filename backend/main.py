@@ -426,6 +426,36 @@ async def internal_disconnect(body: dict):
     return {"ok": True}
 
 
+_level_by_ip: dict[str, homo.LevelGuard] = {}
+
+
+def _stamp_level(doc: dict[str, Any]) -> None:
+    """Corrige el nivel de PGet antes de guardarlo. El texto original no se toca."""
+    if (doc.get("direction") or "rx").lower() != "rx":
+        return
+    raw = homo.pget_level(doc.get("text"))
+    if raw is None:
+        return
+    key = str(doc.get("ip") or doc.get("addr") or "")
+    guard = _level_by_ip.get(key)
+    if guard is None:
+        guard = homo.LevelGuard()
+        _level_by_ip[key] = guard
+    fixed = guard.feed(doc.get("ts"), raw)
+    doc["level_raw"] = fixed["raw"]
+    doc["level"] = fixed["value"]
+    doc["level_corrected"] = fixed["corrected"]
+    doc["level_reason"] = fixed["reason"]
+    if fixed["corrected"]:
+        log.info(
+            "nivel corregido ip=%s raw=%s valor=%s motivo=%s",
+            key,
+            fixed["raw"],
+            fixed["value"],
+            fixed["reason"],
+        )
+
+
 @app.post("/api/internal/telemetry")
 async def internal_telemetry(body: TelemetryBody):
     """Persiste SIEMPRE cada trama RX/TX en MongoDB, ligada a sesión por IP."""
@@ -453,6 +483,7 @@ async def internal_telemetry(body: TelemetryBody):
         "encoding": body.encoding,
         "ts": now,
     }
+    _stamp_level(doc)
     try:
         inserted = await db.messages.insert_one(doc)
     except OverflowError:
@@ -2044,17 +2075,86 @@ async def get_history_days(
     return {"days": days, "count": len(days)}
 
 
+def _history_hour_expr() -> dict[str, Any]:
+    return {
+        "$dateToString": {
+            "format": "%Y-%m-%d %H:00",
+            "date": {"$toDate": "$ts"},
+            "timezone": str(homo.env_tz()),
+        }
+    }
+
+
+@app.get("/api/history/hours")
+async def get_history_hours(
+    addr: str | None = None,
+    ip: str | None = None,
+    session_id: str | None = None,
+    date: str | None = None,
+    limit: int = 24,
+):
+    """Índice de horas (conteos). No devuelve tramas."""
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
+    if not date:
+        since = (datetime.now(timezone.utc) - timedelta(hours=36)).isoformat()
+        q["ts"] = {"$gte": since}
+    limit = max(1, min(limit, 48))
+    pipeline: list[dict[str, Any]] = [
+        {"$match": q},
+        {"$project": {"direction": 1, "hour": _history_hour_expr()}},
+        {
+            "$group": {
+                "_id": "$hour",
+                "count": {"$sum": 1},
+                "rx": {"$sum": {"$cond": [{"$eq": ["$direction", "rx"]}, 1, 0]}},
+                "tx": {"$sum": {"$cond": [{"$eq": ["$direction", "tx"]}, 1, 0]}},
+            }
+        },
+        {"$sort": {"_id": -1}},
+        {"$limit": limit},
+    ]
+    rows = await db.messages.aggregate(pipeline).to_list(limit)
+    hours = [
+        {"hour": r["_id"], "count": r["count"], "rx": r["rx"], "tx": r["tx"]}
+        for r in rows
+        if r.get("_id")
+    ]
+    return {"hours": hours, "count": len(hours), "date": date}
+
+
 @app.get("/api/history")
 async def get_history(
     addr: str | None = None,
     ip: str | None = None,
     session_id: str | None = None,
     date: str | None = None,
-    limit: int = 500,
+    hour: str | None = None,
+    direction: str | None = None,
+    value_type: str | None = None,
+    limit: int = 50,
     skip: int = 0,
 ):
-    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
-    max_limit = 10000 if date else 2000
+    """Página de tramas. `hour` es YYYY-MM-DD HH:00 en la zona de operación.
+
+    La interfaz pide 50. Un tope alto queda para la descarga explícita de una hora o un día.
+    """
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=None if hour else date)
+    if hour:
+        try:
+            start, end = homo.history_window(hour)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        q["ts"] = {"$gte": start, "$lt": end}
+    if direction in {"rx", "tx"}:
+        q["direction"] = direction
+    if value_type and value_type != "all":
+        q["value_type"] = value_type
+    if hour:
+        max_limit = 5000
+    elif date:
+        max_limit = 10000
+    else:
+        max_limit = 2000
     limit = max(1, min(limit, max_limit))
     skip = max(0, skip)
     total = await db.messages.count_documents(q)
@@ -2066,6 +2166,7 @@ async def get_history(
         "skip": skip,
         "limit": limit,
         "date": date,
+        "hour": hour,
     }
 
 

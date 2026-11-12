@@ -542,6 +542,21 @@ body.is-client .layout { display: none; }
   border-top: 1px solid var(--line);
 }
 
+.hour-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.9rem 0.7rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.hour-pager .btn {
+  font-size: 0.72rem;
+}
+
 .hour-block .capture-table thead th {
   position: sticky;
   top: 0;
