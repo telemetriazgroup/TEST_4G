@@ -164,6 +164,8 @@ class RuntimeSettingsBody(BaseModel):
     unit: str | None = None
     control_enabled: bool | None = None
     setpoint: float | None = None
+    band_pct: float | None = None
+    gap_s: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +444,32 @@ _assemblers: dict[str, homo.FrameAssembler] = {}
 _control_state: dict[str, dict[str, Any]] = {}
 
 
+def _control_band_pct() -> float:
+    raw = homo._runtime.get("band_pct")
+    try:
+        pct = float(2 if raw is None else raw)
+    except (TypeError, ValueError):
+        pct = 2.0
+    if pct < 0:
+        return 0.0
+    if pct > 50:
+        return 50.0
+    return pct
+
+
+def _control_gap_s() -> float:
+    raw = homo._runtime.get("gap_s")
+    try:
+        gap = float(120 if raw is None else raw)
+    except (TypeError, ValueError):
+        gap = 120.0
+    if gap < 15:
+        return 15.0
+    if gap > 900:
+        return 900.0
+    return gap
+
+
 def _settings_view() -> dict[str, Any]:
     return {
         "url": homo.env_url(),
@@ -450,6 +478,8 @@ def _settings_view() -> dict[str, Any]:
         "host": homo.destination_host(),
         "control_enabled": bool(homo._runtime.get("control_enabled")),
         "setpoint": float(homo._runtime.get("setpoint") or 130),
+        "band_pct": _control_band_pct(),
+        "gap_s": _control_gap_s(),
     }
 
 
@@ -468,6 +498,16 @@ async def _load_runtime_settings() -> None:
         homo._runtime["setpoint"] = float(doc.get("setpoint") if doc.get("setpoint") is not None else 130)
     except (TypeError, ValueError):
         homo._runtime["setpoint"] = 130.0
+    try:
+        raw_band = doc.get("band_pct")
+        homo._runtime["band_pct"] = float(2 if raw_band is None else raw_band)
+    except (TypeError, ValueError):
+        homo._runtime["band_pct"] = 2.0
+    try:
+        raw_gap = doc.get("gap_s")
+        homo._runtime["gap_s"] = float(120 if raw_gap is None else raw_gap)
+    except (TypeError, ValueError):
+        homo._runtime["gap_s"] = 120.0
     if not doc:
         await db.settings.update_one(
             {"_id": "runtime"},
@@ -477,6 +517,8 @@ async def _load_runtime_settings() -> None:
                 "unit": homo.env_unit(),
                 "control_enabled": False,
                 "setpoint": 130.0,
+                "band_pct": 2.0,
+                "gap_s": 120.0,
             }},
             upsert=True,
         )
@@ -756,6 +798,8 @@ def _control_row(doc: dict[str, Any], ip: str, event: dict[str, Any]) -> dict[st
         "level": event.get("level"),
         "setpoint": event.get("setpoint"),
         "band": event.get("band"),
+        "band_pct": event.get("band_pct"),
+        "gap_s": event.get("gap_s"),
         "slope": event.get("slope"),
         "p": event.get("p"),
         "i": event.get("i"),
@@ -788,6 +832,8 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
         return
     try:
         setpoint = float(homo._runtime.get("setpoint") or 130)
+        band_pct = _control_band_pct()
+        gap_s = _control_gap_s()
         now = homo._epoch(doc.get("ts"))
     except (TypeError, ValueError):
         return
@@ -803,6 +849,8 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
         text=str(doc.get("text") or ""),
         level=level,
         setpoint=setpoint,
+        band_pct=band_pct,
+        gap_s=gap_s,
     )
     if event is None:
         _control_state[ip] = state
@@ -2199,6 +2247,14 @@ async def put_runtime_settings(body: RuntimeSettingsBody):
         if not (0 < body.setpoint <= 500):
             raise HTTPException(400, "el objetivo debe estar entre 0 y 500")
         fields["setpoint"] = float(body.setpoint)
+    if body.band_pct is not None:
+        if not (0 <= body.band_pct <= 50):
+            raise HTTPException(400, "el margen debe estar entre 0 y 50 %")
+        fields["band_pct"] = float(body.band_pct)
+    if body.gap_s is not None:
+        if not (15 <= body.gap_s <= 900):
+            raise HTTPException(400, "la espera debe estar entre 15 y 900 s")
+        fields["gap_s"] = float(body.gap_s)
     if not fields:
         return _settings_view()
     await db.settings.update_one({"_id": "runtime"}, {"$set": fields}, upsert=True)
@@ -2207,14 +2263,28 @@ async def put_runtime_settings(body: RuntimeSettingsBody):
 
 
 @app.get("/api/control/log")
-async def control_log(limit: int = 40):
-    limit = max(1, min(limit, 200))
-    rows = await db.control_log.find({}, {"_id": 0}).sort("ts", -1).to_list(limit)
+async def control_log(limit: int = 40, skip: int = 0):
+    limit = max(1, min(limit, 5000))
+    skip = max(0, skip)
+    rows = (
+        await db.control_log.find({}, {"_id": 0})
+        .sort("ts", -1)
+        .skip(skip)
+        .limit(limit + 1)
+        .to_list(limit + 1)
+    )
+    more = len(rows) > limit
+    rows = rows[:limit]
     view = _settings_view()
     return {
         "items": rows,
         "control_enabled": view["control_enabled"],
         "setpoint": view["setpoint"],
+        "band_pct": view["band_pct"],
+        "gap_s": view["gap_s"],
+        "skip": skip,
+        "limit": limit,
+        "more": more,
         "count": len(rows),
     }
 

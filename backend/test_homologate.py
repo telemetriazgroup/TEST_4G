@@ -191,6 +191,27 @@ def test_control_doses_only_below_two_percent():
     assert "espera" in wait["reason"]
 
 
+def test_control_gap_is_configurable():
+    state, hit = ctrl.decide(None, now=1_000.0, level=110.0, setpoint=130.0)
+    assert hit["send"] is True
+    state = ctrl.commit_tx({**state, "pending": {"n": hit["n"], "tx": hit["tx"]}}, 1_000.0)
+    _, blocked = ctrl.decide(state, now=1_150.0, level=114.0, setpoint=130.0, gap_s=200)
+    assert blocked["send"] is False
+    assert "200s" in blocked["reason"]
+    _, free = ctrl.decide(state, now=1_150.0, level=114.0, setpoint=130.0, gap_s=60)
+    assert free["send"] is True
+
+
+def test_control_band_percent_is_configurable():
+    _, wide = ctrl.decide(None, now=1_000.0, level=120.0, setpoint=130.0, band_pct=10)
+    assert wide["send"] is False
+    assert "10%" in wide["reason"]
+    _, tight = ctrl.decide(None, now=1_000.0, level=129.0, setpoint=130.0, band_pct=0.5)
+    assert tight["send"] is True
+    _, any_drop = ctrl.decide(None, now=1_000.0, level=127.0, setpoint=130.0, band_pct=0)
+    assert any_drop["send"] is True
+
+
 def test_control_tx_only_after_server_get_and_ack():
     imei = "869387065279607"
     state, armed = ctrl.on_frame(
@@ -273,6 +294,8 @@ if __name__ == "__main__":
     test_group_posts_termoking_shape()
     test_group_does_not_mix_after_20s()
     test_control_doses_only_below_two_percent()
+    test_control_band_percent_is_configurable()
+    test_control_gap_is_configurable()
     test_control_tx_only_after_server_get_and_ack()
     test_history_window_lima_hour()
     print("ok")

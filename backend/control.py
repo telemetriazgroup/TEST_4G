@@ -1,6 +1,7 @@
 """Control del nivel (campo 12 de PGet) con dosis RELE(1,N)_.
 
-Solo sube el valor. Empieza cuando la lectura está un 2 % por debajo del objetivo.
+Solo sube el valor. Empieza cuando la lectura cae más del margen configurado
+(por defecto un 2 %) por debajo del objetivo.
 N sigue la pendiente: proporcional al error, un poco de integral si se queda abajo,
 y resta si el nivel ya está subiendo.
 
@@ -20,9 +21,33 @@ _ACK_RE = re.compile(r"SET_RELE\s+(\d+)\s*->\s*(\d+)\s+OK\b", re.IGNORECASE)
 KP_S_PER_UNIT = 0.6
 KI_S_PER_UNIT = 0.08
 KD_S_PER_SLOPE = 0.5
-MIN_GAP_S = 120.0
 N_MAX = 20
-ACT_FRACTION = 0.98
+DEFAULT_BAND_PCT = 2.0
+DEFAULT_GAP_S = 120.0
+
+
+def _margin_pct(band_pct: float | None) -> float:
+    try:
+        pct = DEFAULT_BAND_PCT if band_pct is None else float(band_pct)
+    except (TypeError, ValueError):
+        pct = DEFAULT_BAND_PCT
+    if pct < 0:
+        return 0.0
+    if pct > 100:
+        return 100.0
+    return pct
+
+
+def _gap_s(gap_s: float | None) -> float:
+    try:
+        gap = DEFAULT_GAP_S if gap_s is None else float(gap_s)
+    except (TypeError, ValueError):
+        gap = DEFAULT_GAP_S
+    if gap < 0:
+        return 0.0
+    if gap > 1800:
+        return 1800.0
+    return gap
 
 
 def decide(
@@ -31,6 +56,8 @@ def decide(
     now: float,
     level: float,
     setpoint: float,
+    band_pct: float | None = None,
+    gap_s: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     prev = dict(state or {})
     integral = float(prev.get("integral") or 0.0)
@@ -42,7 +69,10 @@ def decide(
     dt_min = dt_s / 60.0
     slope = 0.0 if prev_level is None else (level - float(prev_level)) / dt_min
     error = setpoint - level
-    band = setpoint * ACT_FRACTION
+    pct = _margin_pct(band_pct)
+    wait_s = _gap_s(gap_s)
+    band = setpoint * (1.0 - pct / 100.0)
+    pct_label = f"{pct:g}%"
 
     p = KP_S_PER_UNIT * max(error, 0.0)
     i = KI_S_PER_UNIT * integral
@@ -56,7 +86,7 @@ def decide(
         reason = "en o sobre el objetivo, no inyecto"
     elif level >= band:
         integral *= 0.8
-        reason = f"dentro del 2% ({band:.1f}), espero sin dosis"
+        reason = f"dentro del {pct_label} ({band:.1f}), espero sin dosis"
     else:
         integral = min(40.0, integral + max(error, 0.0) * dt_min)
         i = KI_S_PER_UNIT * integral
@@ -64,12 +94,15 @@ def decide(
         n = int(round(raw))
         if n < 1:
             n = 0
-            reason = "bajo el 2%, la dosis calculada es nula"
+            reason = f"bajo el {pct_label}, la dosis calculada es nula"
         elif n > N_MAX:
             n = N_MAX
         gap = None if last_dose_t is None else now - float(last_dose_t)
-        if n >= 1 and gap is not None and gap < MIN_GAP_S:
-            reason = f"bajo el 2%, dosis {n}s en espera ({int(MIN_GAP_S - gap)}s) para ver el efecto"
+        if n >= 1 and gap is not None and gap < wait_s:
+            reason = (
+                f"bajo el {pct_label}, dosis {n}s en espera "
+                f"(faltan {int(wait_s - gap)}s de {int(wait_s)}s) para ver el efecto"
+            )
             n = 0
         elif n >= 1:
             send = True
@@ -88,6 +121,8 @@ def decide(
         "level": level,
         "setpoint": setpoint,
         "band": round(band, 2),
+        "band_pct": pct,
+        "gap_s": wait_s,
         "error": round(error, 2),
         "slope": round(slope, 2),
         "p": round(p, 2),
@@ -129,6 +164,8 @@ def on_frame(
     text: str,
     level: float | None,
     setpoint: float,
+    band_pct: float | None = None,
+    gap_s: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Una trama RX.
 
@@ -205,7 +242,14 @@ def on_frame(
     if level is None:
         return prev, None
 
-    nxt, decision = decide(prev, now=now, level=float(level), setpoint=setpoint)
+    nxt, decision = decide(
+        prev,
+        now=now,
+        level=float(level),
+        setpoint=setpoint,
+        band_pct=band_pct,
+        gap_s=gap_s,
+    )
     if prev.get("awaiting"):
         nxt["awaiting"] = prev.get("awaiting")
     if prev.get("ack_done"):

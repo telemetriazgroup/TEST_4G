@@ -365,9 +365,12 @@
     cfgUnit: document.getElementById("cfgUnit"),
     cfgMeta: document.getElementById("cfgMeta"),
     ctlSetpoint: document.getElementById("ctlSetpoint"),
+    ctlBand: document.getElementById("ctlBand"),
+    ctlGap: document.getElementById("ctlGap"),
     ctlEnabled: document.getElementById("ctlEnabled"),
     ctlNow: document.getElementById("ctlNow"),
     ctlBody: document.getElementById("ctlBody"),
+    ctlPager: document.getElementById("ctlPager"),
     ctlMeta: document.getElementById("ctlMeta"),
     emptyControl: document.getElementById("emptyControl"),
     reglasTitle: document.getElementById("reglasTitle"),
@@ -3130,6 +3133,8 @@
     els.cfgEnabled.checked = !!data.enabled;
     els.cfgUnit.value = data.unit || "UNIT111";
     if (els.ctlSetpoint) els.ctlSetpoint.value = data.setpoint ?? 130;
+    if (els.ctlBand) els.ctlBand.value = data.band_pct ?? 2;
+    if (els.ctlGap) els.ctlGap.value = data.gap_s ?? 120;
     if (els.ctlEnabled) els.ctlEnabled.checked = !!data.control_enabled;
     if (els.cfgMeta) {
       els.cfgMeta.textContent = data.host
@@ -3139,6 +3144,13 @@
     return data;
   }
 
+  const CTL_PAGE = 20;
+  const CTL_PREFETCH = 40;
+  let controlItems = [];
+  let controlShown = CTL_PAGE;
+  let controlServerMore = false;
+  let controlDeep = false;
+
   function controlAck(it) {
     if (it.ack_text) return it.ack_text;
     if (it.sent) return "enviado, sin SET_RELE";
@@ -3146,17 +3158,18 @@
     return "—";
   }
 
-  function renderControl(items) {
+  function renderControl() {
     if (!els.ctlBody) return;
+    const visible = controlItems.slice(0, controlShown);
     els.ctlBody.innerHTML = "";
-    if (els.emptyControl) els.emptyControl.classList.toggle("show", items.length === 0);
-    const last = items[0];
+    if (els.emptyControl) els.emptyControl.classList.toggle("show", controlItems.length === 0);
+    const last = controlItems[0];
     if (els.ctlNow) {
       els.ctlNow.textContent = last
         ? `Último nivel ${last.level} · objetivo ${last.setpoint} · ${last.reason || ""}`
         : "Sin lecturas de control todavía.";
     }
-    for (const it of items) {
+    for (const it of visible) {
       const tr = document.createElement("tr");
       tr.innerHTML =
         `<td class="mono">${esc(formatTs(it.ts))}</td>` +
@@ -3172,14 +3185,82 @@
         `<td>${esc(it.reason || it.send_error || "")}</td>`;
       els.ctlBody.appendChild(tr);
     }
-    if (els.ctlMeta) els.ctlMeta.textContent = `${items.length} decisión(es)`;
+    if (els.ctlPager) {
+      els.ctlPager.innerHTML = "";
+      const pending = controlShown < controlItems.length;
+      const fromDb = !pending && controlServerMore;
+      if (pending || fromDb) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn ghost";
+        const left = pending ? Math.min(CTL_PAGE, controlItems.length - controlShown) : CTL_PAGE;
+        btn.textContent = pending ? `Siguientes ${left}` : "Cargar más de la base";
+        btn.addEventListener("click", () => {
+          showMoreControl().catch((e) => {
+            if (els.ctlMeta) els.ctlMeta.textContent = String(e);
+          });
+        });
+        els.ctlPager.appendChild(btn);
+      }
+    }
+    if (els.ctlMeta) {
+      els.ctlMeta.textContent = `${visible.length} de ${controlItems.length} en pantalla`;
+    }
   }
 
-  async function loadControl() {
-    const r = await fetch(`${API}/api/control/log?limit=40`);
+  async function fetchControlLog(limit, skip) {
+    const r = await fetch(`${API}/api/control/log?limit=${limit}&skip=${skip}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "no se leyó el control");
-    renderControl(data.items || []);
+    return data;
+  }
+
+  async function loadControl(keepWindow) {
+    const shown = keepWindow ? controlShown : CTL_PAGE;
+    const data = await fetchControlLog(CTL_PREFETCH, 0);
+    controlItems = data.items || [];
+    controlShown = Math.min(Math.max(shown, CTL_PAGE), controlItems.length || CTL_PAGE);
+    if (controlShown > controlItems.length) controlShown = controlItems.length;
+    controlServerMore = !!data.more;
+    controlDeep = false;
+    renderControl();
+  }
+
+  async function showMoreControl() {
+    if (controlShown < controlItems.length) {
+      controlShown = Math.min(controlShown + CTL_PAGE, controlItems.length);
+      renderControl();
+      return;
+    }
+    if (!controlServerMore) return;
+    const data = await fetchControlLog(CTL_PAGE, controlItems.length);
+    const extra = data.items || [];
+    controlItems = controlItems.concat(extra);
+    controlShown = controlItems.length;
+    controlServerMore = !!data.more;
+    controlDeep = true;
+    renderControl();
+  }
+
+  async function exportControl() {
+    const data = await fetchControlLog(5000, 0);
+    const items = (data.items || []).slice().reverse();
+    if (!items.length) {
+      if (els.ctlMeta) els.ctlMeta.textContent = "No hay decisiones para descargar.";
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    downloadText(
+      JSON.stringify({
+        exported_at: new Date().toISOString(),
+        source: "control_pdi",
+        count: items.length,
+        items,
+      }, null, 2),
+      `control_pdi_${stamp}.json`,
+      "application/json",
+    );
+    if (els.ctlMeta) els.ctlMeta.textContent = `Descargadas ${items.length} decisiones`;
   }
 
   const btnSaveSettings = document.getElementById("btnSaveSettings");
@@ -3205,9 +3286,11 @@
         const data = await putSettings({
           control_enabled: !!els.ctlEnabled.checked,
           setpoint: Number(els.ctlSetpoint.value),
+          band_pct: Number(els.ctlBand.value),
+          gap_s: Number(els.ctlGap.value),
         });
         els.ctlMeta.textContent = data.control_enabled
-          ? `Control activo · objetivo ${data.setpoint} · TX al llegar Server_Get`
+          ? `Control activo · objetivo ${data.setpoint} · margen ${data.band_pct}% · espera ${data.gap_s}s · TX al llegar Server_Get`
           : "Control apagado";
       } catch (e) {
         els.ctlMeta.textContent = String(e);
@@ -3216,7 +3299,13 @@
   }
   const btnRefreshControl = document.getElementById("btnRefreshControl");
   if (btnRefreshControl) {
-    btnRefreshControl.addEventListener("click", () => loadControl().catch((e) => {
+    btnRefreshControl.addEventListener("click", () => loadControl(false).catch((e) => {
+      if (els.ctlMeta) els.ctlMeta.textContent = String(e);
+    }));
+  }
+  const btnExportControl = document.getElementById("btnExportControl");
+  if (btnExportControl) {
+    btnExportControl.addEventListener("click", () => exportControl().catch((e) => {
       if (els.ctlMeta) els.ctlMeta.textContent = String(e);
     }));
   }
@@ -3228,8 +3317,8 @@
   loadSettings().catch((e) => { if (els.cfgMeta) els.cfgMeta.textContent = String(e); });
   setInterval(loadDevices, 10000);
   setInterval(() => {
-    if (activeTab === "control") {
-      loadControl().catch((e) => { if (els.ctlMeta) els.ctlMeta.textContent = String(e); });
-    }
+      if (activeTab === "control" && !controlDeep) {
+        loadControl(true).catch((e) => { if (els.ctlMeta) els.ctlMeta.textContent = String(e); });
+      }
   }, 5000);
 })();

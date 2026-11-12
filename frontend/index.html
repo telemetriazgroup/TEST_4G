@@ -547,13 +547,20 @@
       <div class="panel-head">
         <h2>Control del nivel</h2>
         <button type="button" id="btnSaveControl" class="btn primary">Guardar</button>
+        <button type="button" id="btnExportControl" class="btn ghost">Descargar JSON</button>
         <button type="button" id="btnRefreshControl" class="btn ghost">Actualizar</button>
       </div>
       <div class="cmd-card">
         <label>Objetivo
           <input id="ctlSetpoint" type="number" step="0.1" min="1" max="500" value="130" />
         </label>
-        <p class="help">La dosis se arma cuando el nivel está un 2% por debajo. Sale por TX solo al llegar un RX Server_Get. El equipo confirma con SET_RELE 1 -&gt; N OK.</p>
+        <label>Margen bajo el objetivo (%)
+          <input id="ctlBand" type="number" step="0.1" min="0" max="50" value="2" />
+        </label>
+        <label>Espera entre dosis (s)
+          <input id="ctlGap" type="number" step="1" min="15" max="900" value="120" />
+        </label>
+        <p class="help">La dosis se arma cuando el nivel cae más de este porcentaje bajo el objetivo. Después de cada RELE(1,N)_ el lazo espera esos segundos antes de armar otra, para ver cuánto subió. 120 es el valor inicial; súbelo si el nivel sigue subiendo y se pasa del objetivo. Sale por TX solo al llegar un RX Server_Get. El equipo confirma con SET_RELE 1 -&gt; N OK.</p>
         <label class="chk">
           <input id="ctlEnabled" type="checkbox" />
           Control activo
@@ -581,6 +588,7 @@
         </table>
       </div>
       <p id="emptyControl" class="empty show">Aún no hay decisiones. Activa el control: la orden espera un RX Server_Get.</p>
+      <div id="ctlPager" class="hour-pager"></div>
       <p id="ctlMeta" class="hint">—</p>
     </section>
   </main>
