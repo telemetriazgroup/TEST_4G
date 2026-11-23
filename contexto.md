@@ -1,4 +1,4 @@
-# Lógica TCP — TEST_4G (puerto 9917)
+# Lógica TCP — TEST_4G (puerto 9918)
 
 Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha conexiones TCP, parsea tramas (string/hex/JSON), limpia IPs huérfanas y permite enviar comandos de vuelta al dispositivo. El backend guarda en MongoDB y el frontend actúa como monitor serial web.
 
@@ -8,30 +8,32 @@ Documentación del servicio `tcp_bridge` (`tcp_bridge/bridge.py`), que escucha c
 
 | Puerto | Servicio | Función |
 |--------|----------|---------|
-| **9917** | `tcp_bridge` (TCP) | Conexión entrante del dispositivo |
+| **9918** | `tcp_bridge` (TCP) | Conexión entrante de los equipos |
 | **19802** | `tcp_bridge` (HTTP interno) | API para enviar comandos y consultar dispositivos conectados |
 | **19702** | `backend` (HTTP + WS) | API REST, MongoDB, WebSocket |
 | **19602** | `frontend` (HTTP) | Interfaz web tipo monitor serial |
 | **8451** | `ztrack` (HTTP) | App cliente admin / monitor |
 | **29024** | `mongo` (host → 27017 contenedor) | Persistencia |
 
-El dispositivo **se conecta al servidor** por TCP 9917. No es el backend quien abre la conexión hacia el equipo.
+Los equipos **se conectan al servidor** por TCP 9918. Pueden llegar varios a la vez, cada uno con su IP y su puerto de origen. Cada `accept()` corre en su propio hilo. Lo que distingue un equipo de otro es el prefijo de la trama. Ese valor se guarda en el campo `imei`: el nombre es el del campo, no una regla de IMEI (no se exige 14–16 dígitos ni dígito de control). Puede ser `869387065279607` o `EQ-01`.
+
+El histórico por hora, el archivo por día y el control usan ese código. Cada código tiene su objetivo y su interruptor. La base de Mongo sigue llamándose `test_4g_9917` y el volumen `mongo_data_9917`: solo cambió el puerto de escucha, para no dejar el histórico anterior huérfano.
 
 ```
-Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ──► MongoDB
-                              │
-                              └── POST /api/internal/* (telemetría, conexión)
+Equipo ──TCP:9918──► tcp_bridge ──HTTP──► backend ──► MongoDB
+                         │
+                         └── POST /api/internal/* (telemetría, conexión, imei)
 ```
 
 ---
 
 ## Estructura de conexión
 
-1. Al iniciar el contenedor `tcp_bridge`, el servicio `port_cleaner` (Docker Compose) detiene contenedores previos que ocupen el puerto **9917**.
+1. Al iniciar el contenedor `tcp_bridge`, el servicio `port_cleaner` (Docker Compose) detiene contenedores previos que ocupen el puerto **9918**.
 2. `tcp_bridge` arranca un hilo con `tcp_server_loop()`:
    - Crea socket `AF_INET` / `SOCK_STREAM`
-   - `bind(0.0.0.0, 9917)` con `SO_REUSEADDR`
-   - `listen(10)` — hasta 10 conexiones en cola
+   - `bind(0.0.0.0, 9918)` con `SO_REUSEADDR`
+   - `listen(128)` — cola de conexiones nuevas; cada `accept()` sigue en su hilo
 3. Por cada `accept()`, se lanza un **hilo independiente** `handle_client(conn, addr)`.
 4. Al arrancar también se notifica al backend `POST /api/internal/disconnect_all` para limpiar estados `is_connected` obsoletos en base de datos.
 

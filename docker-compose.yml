@@ -8,7 +8,7 @@ services:
       - ./port_cleaner/clean.sh:/clean.sh:ro
     entrypoint: ["/bin/sh", "/clean.sh"]
     environment:
-      CLEAN_PORT: "9917"
+      CLEAN_PORT: "9918"
     restart: "no"
 
   mongo:
@@ -42,10 +42,10 @@ services:
   tcp_bridge:
     build: ./tcp_bridge
     ports:
-      - "9917:9917"
+      - "9918:9918"
       - "19802:19802"
     environment:
-      TCP_PORT: "9917"
+      TCP_PORT: "9918"
       HTTP_PORT: "19802"
       BACKEND_URL: http://backend:19702
       IDLE_TIMEOUT_S: "300"

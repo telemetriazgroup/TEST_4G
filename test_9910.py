@@ -3,7 +3,7 @@
 Punto de entrada legacy (test_9910.py).
 
 Delega al bridge completo en tcp_bridge/bridge.py, que cumple:
-  - bind 0.0.0.0:9917 + SO_REUSEADDR + listen(10)
+  - bind 0.0.0.0:9918 + SO_REUSEADDR + listen(128)
   - hilo por accept() → handle_client
   - register_pending / limpieza de IPs huérfanas
   - recv(4096) → buffer → líneas → parse_chunks → backend
@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "tcp_bridge"))
 
 # Compat: APIs legacy activables con FORWARD_LEGACY=1
-os.environ.setdefault("TCP_PORT", "9917")
+os.environ.setdefault("TCP_PORT", "9918")
 os.environ.setdefault("HTTP_PORT", "19802")
 os.environ.setdefault("BACKEND_URL", os.getenv("BACKEND_URL", "http://127.0.0.1:19702"))
 

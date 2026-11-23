@@ -1,7 +1,7 @@
 """
 Homologación POLLO → JSON estándar (datos_homologar.md).
 
-Parseo puro, sin I/O. El envío HTTP vive en main.py para no bloquear el socket 9917.
+Parseo puro, sin I/O. El envío HTTP vive en main.py para no bloquear el socket TCP.
 """
 
 from __future__ import annotations
@@ -32,7 +32,16 @@ LEVEL_BAND = 15.0
 LEVEL_SAMPLE_S = 35.0
 GROUP_WINDOW_S = 20.0
 D3_PREFIX = "1 32516 1051 0 0 0"
-IMEI_RE = re.compile(r"^(\d{14,16})")
+# El prefijo se llama imei, pero es el código del equipo: no se valida como IMEI.
+_CODE_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_-]{2,63}?)(?=\{|Server_Get|PGet|PPM:|SET_RELE\b)"
+)
+
+
+def identification_code(text: str | None) -> str:
+    """Código que viene pegado al inicio de la trama. No exige formato IMEI."""
+    match = _CODE_RE.match(str(text or "").lstrip())
+    return match.group(1) if match else ""
 
 
 def env_enabled() -> bool:
@@ -322,7 +331,6 @@ def loose_object(text: str | None) -> dict[str, Any] | None:
 
 def parse_piece(text: str | None) -> dict[str, Any]:
     raw = str(text or "").lstrip()
-    imei_m = IMEI_RE.match(raw)
     obj = loose_object(raw) or {}
 
     def field_hex(name: str) -> str:
@@ -337,12 +345,7 @@ def parse_piece(text: str | None) -> dict[str, Any]:
         d1 = ""
     if OP_CONTROL not in d2:
         d2 = ""
-    imei = imei_m.group(1) if imei_m else ""
-    if not imei:
-        ident = str(obj.get("i") or "")
-        if ident.isdigit() and len(ident) >= 14:
-            imei = ident
-    return {"imei": imei, "d1": d1, "d2": d2}
+    return {"imei": identification_code(raw), "d1": d1, "d2": d2}
 
 
 class FrameAssembler:

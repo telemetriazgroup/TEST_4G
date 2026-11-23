@@ -11,6 +11,7 @@ from homologate import (
     date_key,
     history_window,
     hour_key,
+    identification_code,
     pget_level,
     split_json_objects,
 )
@@ -146,6 +147,13 @@ IMEI = "869387065279607"
 
 def _semi(field: str, value: str) -> str:
     return f'{IMEI}{{"i":"MAD000","{field}";"{value}"}}'
+
+
+def test_identification_code_is_not_an_imei_rule():
+    assert identification_code("869387065279607Server_Get") == "869387065279607"
+    assert identification_code("EQ-01Server_Get") == "EQ-01"
+    assert identification_code('ABC12{"i":"MAD000","d01";"AA"}') == "ABC12"
+    assert identification_code('{"i":"MAD000"}') == ""
 
 
 def test_group_posts_termoking_shape():
@@ -291,6 +299,7 @@ if __name__ == "__main__":
     test_level_guard_replaces_spike_with_slope()
     test_level_guard_keeps_a_real_dose_step()
     test_level_guard_ignores_spike_before_slope()
+    test_identification_code_is_not_an_imei_rule()
     test_group_posts_termoking_shape()
     test_group_does_not_mix_after_20s()
     test_control_doses_only_below_two_percent()

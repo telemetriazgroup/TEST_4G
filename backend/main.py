@@ -1,5 +1,5 @@
 """
-Backend REST + WebSocket para el monitor serial TCP (puerto 9917).
+Backend REST + WebSocket para el monitor serial TCP (puerto 9918).
 
 Persistencia:
 - sessions  → sesión por IP (activa / histórica)
@@ -16,6 +16,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import httpx
@@ -97,6 +98,7 @@ class TelemetryBody(BaseModel):
     encoding: str | None = None
     session_id: str | None = None
     ts: str | None = None
+    imei: str | None = None
 
 
 class ConnectBody(BaseModel):
@@ -158,6 +160,14 @@ class HomologateEnqueueBody(BaseModel):
     ids: list[str] | None = None
 
 
+class ControlTargetBody(BaseModel):
+    imei: str
+    enabled: bool | None = None
+    setpoint: float | None = None
+    band_pct: float | None = None
+    gap_s: float | None = None
+
+
 class RuntimeSettingsBody(BaseModel):
     url: str | None = None
     enabled: bool | None = None
@@ -203,11 +213,25 @@ def _sanitize_for_mongo(value: Any) -> Any:
     return value
 
 
+def _day_bounds(day: str) -> tuple[str, str]:
+    """Día YYYY-MM-DD en la zona de operación, en ISO UTC."""
+    try:
+        start = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(str(homo.env_tz())))
+    except ValueError as exc:
+        raise HTTPException(400, "la fecha debe ser YYYY-MM-DD") from exc
+    end = start + timedelta(days=1)
+    return (
+        start.astimezone(timezone.utc).isoformat(),
+        end.astimezone(timezone.utc).isoformat(),
+    )
+
+
 def _history_query(
     *,
     session_id: str | None = None,
     addr: str | None = None,
     ip: str | None = None,
+    imei: str | None = None,
     date: str | None = None,
 ) -> dict[str, Any]:
     q: dict[str, Any] = {}
@@ -217,6 +241,8 @@ def _history_query(
         q["addr"] = addr
     elif ip:
         q["ip"] = ip
+    if imei:
+        q["imei"] = imei.strip()
     if date:
         try:
             start = datetime.fromisoformat(f"{date}T00:00:00+00:00")
@@ -344,9 +370,14 @@ async def startup() -> None:
     await db.comandos.create_index([("addr", 1), ("status", 1)])
     await db.comandos.create_index([("ip", 1), ("enqueued_at", -1)])
     await db.comandos.create_index([("enqueued_at", -1)])
+    await db.messages.create_index([("imei", 1), ("ts", -1)])
+    await db.homologate_log.create_index([("i", 1), ("ts", -1)])
     await db.control_log.create_index([("ts", -1)])
+    await db.control_log.create_index([("imei", 1), ("ts", -1)])
+    await db.control_targets.create_index("updated_at")
     await db.connect_tx.update_many({"status": "sending"}, {"$set": {"status": "armed"}})
     await _load_runtime_settings()
+    await _load_control_targets()
     await _restore_homologate_queue()
     asyncio.create_task(_homologate_queue_worker())
     asyncio.create_task(_seguimiento_worker())
@@ -442,6 +473,7 @@ async def internal_disconnect(body: dict):
 _level_by_ip: dict[str, homo.LevelGuard] = {}
 _assemblers: dict[str, homo.FrameAssembler] = {}
 _control_state: dict[str, dict[str, Any]] = {}
+_targets: dict[str, dict[str, Any]] = {}
 
 
 def _control_band_pct() -> float:
@@ -524,6 +556,51 @@ async def _load_runtime_settings() -> None:
         )
 
 
+def _device_key(doc: dict[str, Any]) -> str:
+    code = str(doc.get("imei") or "").strip()
+    if code:
+        return code
+    return str(doc.get("ip") or doc.get("addr") or "")
+
+
+def _target_view(imei: str, doc: dict[str, Any] | None) -> dict[str, Any]:
+    src = doc or {}
+    try:
+        setpoint = float(src.get("setpoint") if src.get("setpoint") is not None else homo._runtime.get("setpoint") or 130)
+    except (TypeError, ValueError):
+        setpoint = 130.0
+    try:
+        band = float(src.get("band_pct") if src.get("band_pct") is not None else _control_band_pct())
+    except (TypeError, ValueError):
+        band = 2.0
+    try:
+        gap = float(src.get("gap_s") if src.get("gap_s") is not None else _control_gap_s())
+    except (TypeError, ValueError):
+        gap = 120.0
+    return {
+        "imei": imei,
+        "enabled": bool(src.get("enabled")),
+        "setpoint": setpoint,
+        "band_pct": band,
+        "gap_s": gap,
+        "ip": src.get("ip"),
+        "addr": src.get("addr"),
+        "updated_at": src.get("updated_at"),
+    }
+
+
+async def _load_control_targets() -> None:
+    _targets.clear()
+    cursor = db.control_targets.find({})
+    async for doc in cursor:
+        imei = str(doc.get("_id") or "")
+        if not imei:
+            continue
+        view = _target_view(imei, doc)
+        view["enabled"] = bool(doc.get("enabled"))
+        _targets[imei] = view
+
+
 def _stamp_level(doc: dict[str, Any]) -> None:
     """Corrige el nivel de PGet antes de guardarlo. El texto original no se toca."""
     if (doc.get("direction") or "rx").lower() != "rx":
@@ -531,7 +608,7 @@ def _stamp_level(doc: dict[str, Any]) -> None:
     raw = homo.pget_level(doc.get("text"))
     if raw is None:
         return
-    key = str(doc.get("ip") or doc.get("addr") or "")
+    key = _device_key(doc)
     guard = _level_by_ip.get(key)
     if guard is None:
         guard = homo.LevelGuard()
@@ -577,6 +654,7 @@ async def internal_telemetry(body: TelemetryBody):
         "tcp_header": _sanitize_for_mongo(body.tcp_header) if body.tcp_header else None,
         "encoding": body.encoding,
         "ts": now,
+        "imei": ((body.imei or "").strip() or homo.identification_code(body.text)) or None,
     }
     _stamp_level(doc)
     try:
@@ -675,7 +753,7 @@ async def _post_standard(payload: dict[str, Any]) -> tuple[int | None, str | Non
 
 
 def _group_key(doc: dict[str, Any]) -> str:
-    return str(doc.get("ip") or doc.get("addr") or "")
+    return _device_key(doc)
 
 
 def _push_group(doc: dict[str, Any]) -> dict[str, Any] | None:
@@ -700,6 +778,23 @@ async def _post_grouped(doc: dict[str, Any], payload: dict[str, Any]) -> None:
     payload_hash = homo.payload_hash(payload)
     url = homo.env_url()
     if not homo.env_enabled() or not url:
+        await db.homologate_log.insert_one(
+            {
+                "ts": _now(),
+                "i": payload.get("i"),
+                "imei": doc.get("imei") or payload.get("i"),
+                "status": "disabled",
+                "error": "no_url" if not url else "disabled",
+                "payload": payload,
+                "payload_hash": payload_hash,
+                "hour": homo.hour_key(doc.get("ts")),
+                "session_id": doc.get("session_id"),
+                "addr": doc.get("addr"),
+                "ip": doc.get("ip"),
+                "message_ts": doc.get("ts"),
+                "source": "live",
+            }
+        )
         await _mark_message(
             doc,
             {
@@ -732,6 +827,7 @@ async def _post_grouped(doc: dict[str, Any], payload: dict[str, Any]) -> None:
         "session_id": doc.get("session_id"),
         "addr": doc.get("addr"),
         "ip": doc.get("ip"),
+        "imei": doc.get("imei"),
         "message_ts": doc.get("ts"),
         "source": "live",
     }
@@ -788,6 +884,7 @@ def _control_row(doc: dict[str, Any], ip: str, event: dict[str, Any]) -> dict[st
         "ip": ip,
         "addr": doc.get("addr"),
         "kind": event.get("kind"),
+        "imei": doc.get("imei"),
         "sent": bool(event.get("sent")),
         "armed": bool(event.get("armed")),
         "ack": event.get("ack"),
@@ -821,19 +918,24 @@ async def _stamp_control_ack(token: str | None, ack: bool, ack_text: str | None,
 
 
 async def _maybe_control(doc: dict[str, Any]) -> None:
-    if not homo._runtime.get("control_enabled"):
-        return
     if (doc.get("direction") or "rx").lower() != "rx":
         return
     if (doc.get("value_type") or "") == "tcp_header":
         return
+    code = str(doc.get("imei") or "").strip()
     ip = str(doc.get("ip") or "")
-    if not ip:
+    if not code or not ip:
+        return
+    target = _targets.get(code)
+    if target is not None:
+        target["ip"] = ip
+        target["addr"] = doc.get("addr")
+    if not target or not target.get("enabled"):
         return
     try:
-        setpoint = float(homo._runtime.get("setpoint") or 130)
-        band_pct = _control_band_pct()
-        gap_s = _control_gap_s()
+        setpoint = float(target.get("setpoint") or 130)
+        band_pct = float(target.get("band_pct") if target.get("band_pct") is not None else 2)
+        gap_s = float(target.get("gap_s") if target.get("gap_s") is not None else 120)
         now = homo._epoch(doc.get("ts"))
     except (TypeError, ValueError):
         return
@@ -844,7 +946,7 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
         level = None
 
     state, event = ctrl.on_frame(
-        _control_state.get(ip),
+        _control_state.get(code),
         now=now,
         text=str(doc.get("text") or ""),
         level=level,
@@ -853,7 +955,7 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
         gap_s=gap_s,
     )
     if event is None:
-        _control_state[ip] = state
+        _control_state[code] = state
         return
 
     if event.get("kind") == "ack":
@@ -866,7 +968,7 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
         if stamped:
             state.pop("ack_done", None)
             state.pop("ack_token", None)
-        _control_state[ip] = state
+        _control_state[code] = state
         return
 
     if event.get("kind") == "tx" and event.get("tx"):
@@ -880,9 +982,9 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
             "token": token,
             "phase": "sending",
         }
-        _control_state[ip] = hold
+        _control_state[code] = hold
         sent, error = await _bridge_control_send(ip, doc.get("addr"), str(event["tx"]))
-        fresh = dict(_control_state.get(ip) or {})
+        fresh = dict(_control_state.get(code) or {})
         ack_text = fresh.pop("ack_done", None)
         fresh.pop("ack_token", None)
         if sent:
@@ -906,13 +1008,13 @@ async def _maybe_control(doc: dict[str, Any]) -> None:
             event["sent"] = False
             event["send_error"] = error
             event["reason"] = f"Server_Get pero no salió {event['tx']}: {error}"
-        _control_state[ip] = fresh
+        _control_state[code] = fresh
         await db.control_log.insert_one(_control_row(doc, ip, event))
         if sent:
             log.info("control %s ip=%s nivel=%s", event["tx"], ip, event.get("level"))
         return
 
-    _control_state[ip] = state
+    _control_state[code] = state
     await db.control_log.insert_one(_control_row(doc, ip, event))
 
 
@@ -1729,55 +1831,133 @@ async def homologate_sent(
     date: str | None = None,
     hour: str | None = None,
     ident: str | None = None,
-    limit: int = 500,
+    code: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 40,
+    skip: int = 0,
 ):
-    """Consulta tramas estándar enviadas (vivo + histórico) y su resultado POST."""
+    """JSON enviado o no enviado, con el código `i` de cada trama."""
     q: dict[str, Any] = {}
     if status and status != "all":
         q["status"] = status
     if source and source != "all":
         q["source"] = source
-    if ident:
-        q["i"] = ident
+    ident_code = (code or ident or "").strip()
+    if ident_code:
+        q["i"] = ident_code
     if hour:
         q["hour"] = hour
     elif date:
         q["hour"] = {"$regex": f"^{date}"}
-    limit = max(1, min(limit, 2000))
-    cursor = db.homologate_log.find(q, {"_id": 0}).sort("ts", -1).limit(limit)
-    rows = await cursor.to_list(limit)
+    elif date_from or date_to:
+        span: dict[str, str] = {}
+        if date_from:
+            span["$gte"] = _day_bounds(date_from)[0]
+        if date_to:
+            span["$lt"] = _day_bounds(date_to)[1]
+        q["ts"] = span
+    limit = max(1, min(limit, 5000))
+    skip = max(0, skip)
+    found = (
+        await db.homologate_log.find(q, {"_id": 0})
+        .sort("ts", -1)
+        .skip(skip)
+        .limit(limit + 1)
+        .to_list(limit + 1)
+    )
+    more = len(found) > limit
+    rows = found[:limit]
     pending = []
-    for item in list(_queue):
-        if item.get("status") not in {"queued", "sending"}:
-            continue
-        pending.append(
-            {
-                "ts": item.get("enqueued_at"),
-                "i": item.get("i"),
-                "status": item.get("status"),
-                "source": "queue",
-                "hour": item.get("hour"),
-                "payload": item.get("payload"),
-                "payload_hash": item.get("payload_hash"),
-                "addr": item.get("addr"),
-                "ip": item.get("ip"),
-                "host": homo.destination_host(),
-                "http_status": None,
-                "error": None,
-            }
-        )
+    if skip == 0:
+        for item in list(_queue):
+            if item.get("status") not in {"queued", "sending"}:
+                continue
+            if ident_code and item.get("i") != ident_code:
+                continue
+            pending.append(
+                {
+                    "ts": item.get("enqueued_at"),
+                    "i": item.get("i"),
+                    "status": item.get("status"),
+                    "source": "queue",
+                    "hour": item.get("hour"),
+                    "payload": item.get("payload"),
+                    "payload_hash": item.get("payload_hash"),
+                    "addr": item.get("addr"),
+                    "ip": item.get("ip"),
+                    "host": homo.destination_host(),
+                    "http_status": None,
+                    "error": None,
+                }
+            )
     ok = sum(1 for r in rows if r.get("status") == "ok")
-    err = sum(1 for r in rows if r.get("status") == "error")
+    err = sum(1 for r in rows if r.get("status") != "ok")
     return {
         "items": pending + rows,
-        "count": len(pending) + len(rows),
+        "count": len(rows),
         "pending": len(pending),
         "ok": ok,
         "errors": err,
+        "skip": skip,
+        "limit": limit,
+        "more": more,
         "configured": bool(homo.env_url()),
         "host": homo.destination_host(),
         "queue": _queue_snapshot(),
     }
+
+
+@app.get("/api/homologate/summary")
+async def homologate_summary(
+    code: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
+    """Cuántos JSON salieron, por día y por código."""
+    q: dict[str, Any] = {}
+    if code and code.strip():
+        q["i"] = code.strip()
+    if date_from or date_to:
+        span: dict[str, str] = {}
+        if date_from:
+            span["$gte"] = _day_bounds(date_from)[0]
+        if date_to:
+            span["$lt"] = _day_bounds(date_to)[1]
+        q["ts"] = span
+    pipeline: list[dict[str, Any]] = [
+        {"$match": q},
+        {
+            "$group": {
+                "_id": {
+                    "day": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": {"$dateFromString": {"dateString": "$ts"}},
+                            "timezone": homo.env_tz(),
+                        }
+                    },
+                    "i": "$i",
+                },
+                "ok": {"$sum": {"$cond": [{"$eq": ["$status", "ok"]}, 1, 0]}},
+                "error": {"$sum": {"$cond": [{"$ne": ["$status", "ok"]}, 1, 0]}},
+            }
+        },
+        {"$sort": {"_id.day": -1, "_id.i": 1}},
+        {"$limit": 200},
+    ]
+    rows = await db.homologate_log.aggregate(pipeline).to_list(200)
+    days = [
+        {
+            "date": (r.get("_id") or {}).get("day"),
+            "i": (r.get("_id") or {}).get("i") or "—",
+            "ok": r.get("ok") or 0,
+            "error": r.get("error") or 0,
+        }
+        for r in rows
+        if (r.get("_id") or {}).get("day")
+    ]
+    return {"days": days, "count": len(days)}
 
 
 def _seguimiento_query(
@@ -2263,11 +2443,14 @@ async def put_runtime_settings(body: RuntimeSettingsBody):
 
 
 @app.get("/api/control/log")
-async def control_log(limit: int = 40, skip: int = 0):
+async def control_log(limit: int = 40, skip: int = 0, imei: str | None = None):
     limit = max(1, min(limit, 5000))
     skip = max(0, skip)
+    q: dict[str, Any] = {}
+    if imei and imei.strip():
+        q["imei"] = imei.strip()
     rows = (
-        await db.control_log.find({}, {"_id": 0})
+        await db.control_log.find(q, {"_id": 0})
         .sort("ts", -1)
         .skip(skip)
         .limit(limit + 1)
@@ -2287,6 +2470,82 @@ async def control_log(limit: int = 40, skip: int = 0):
         "more": more,
         "count": len(rows),
     }
+
+
+@app.get("/api/control/targets")
+async def control_targets():
+    """Cada código tiene su objetivo. La lista junta los vistos y los ya guardados."""
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    seen = await db.messages.aggregate(
+        [
+            {"$match": {"imei": {"$nin": [None, ""]}, "ts": {"$gte": since}}},
+            {"$sort": {"ts": -1}},
+            {
+                "$group": {
+                    "_id": "$imei",
+                    "ip": {"$first": "$ip"},
+                    "addr": {"$first": "$addr"},
+                    "ts": {"$first": "$ts"},
+                }
+            },
+            {"$limit": 100},
+        ]
+    ).to_list(100)
+    by_code: dict[str, dict[str, Any]] = {}
+    for row in seen:
+        code = str(row.get("_id") or "")
+        if not code:
+            continue
+        saved = _targets.get(code)
+        view = _target_view(code, saved)
+        view["ip"] = (saved or {}).get("ip") or row.get("ip")
+        view["addr"] = (saved or {}).get("addr") or row.get("addr")
+        view["last_ts"] = row.get("ts")
+        by_code[code] = view
+    for code, saved in _targets.items():
+        if code not in by_code:
+            by_code[code] = _target_view(code, saved)
+    items = sorted(by_code.values(), key=lambda item: str(item.get("imei")))
+    return {"items": items, "count": len(items)}
+
+
+@app.put("/api/control/targets")
+async def put_control_target(body: ControlTargetBody):
+    imei = body.imei.strip()
+    if not imei:
+        raise HTTPException(400, "falta el código del equipo")
+    current = dict(_targets.get(imei) or _target_view(imei, None))
+    if body.enabled is not None:
+        current["enabled"] = bool(body.enabled)
+    if body.setpoint is not None:
+        if not (0 < body.setpoint <= 500):
+            raise HTTPException(400, "el objetivo debe estar entre 0 y 500")
+        current["setpoint"] = float(body.setpoint)
+    if body.band_pct is not None:
+        if not (0 <= body.band_pct <= 50):
+            raise HTTPException(400, "el margen debe estar entre 0 y 50 %")
+        current["band_pct"] = float(body.band_pct)
+    if body.gap_s is not None:
+        if not (15 <= body.gap_s <= 900):
+            raise HTTPException(400, "la espera debe estar entre 15 y 900 s")
+        current["gap_s"] = float(body.gap_s)
+    current["updated_at"] = _now()
+    current["imei"] = imei
+    _targets[imei] = current
+    await db.control_targets.update_one(
+        {"_id": imei},
+        {"$set": {
+            "enabled": bool(current.get("enabled")),
+            "setpoint": float(current.get("setpoint") or 130),
+            "band_pct": float(current.get("band_pct") or 2),
+            "gap_s": float(current.get("gap_s") or 120),
+            "ip": current.get("ip"),
+            "addr": current.get("addr"),
+            "updated_at": current["updated_at"],
+        }},
+        upsert=True,
+    )
+    return _target_view(imei, current)
 
 
 @app.get("/api/homologate/queue")
@@ -2450,10 +2709,11 @@ async def get_history_days(
     addr: str | None = None,
     ip: str | None = None,
     session_id: str | None = None,
+    imei: str | None = None,
     limit: int = 365,
 ):
     """Lista días con tramas guardadas (más recientes primero)."""
-    q = _history_query(session_id=session_id, addr=addr, ip=ip)
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, imei=imei)
     limit = max(1, min(limit, 1000))
     pipeline: list[dict[str, Any]] = [
         {"$match": q},
@@ -2499,10 +2759,11 @@ async def get_history_hours(
     ip: str | None = None,
     session_id: str | None = None,
     date: str | None = None,
+    imei: str | None = None,
     limit: int = 24,
 ):
     """Índice de horas (conteos). No devuelve tramas."""
-    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=date)
+    q = _history_query(session_id=session_id, addr=addr, ip=ip, imei=imei, date=date)
     if not date:
         since = (datetime.now(timezone.utc) - timedelta(hours=36)).isoformat()
         q["ts"] = {"$gte": since}
@@ -2537,16 +2798,23 @@ async def get_history(
     session_id: str | None = None,
     date: str | None = None,
     hour: str | None = None,
+    imei: str | None = None,
     direction: str | None = None,
     value_type: str | None = None,
-    limit: int = 50,
+    limit: int = 40,
     skip: int = 0,
 ):
     """Página de tramas. `hour` es YYYY-MM-DD HH:00 en la zona de operación.
 
-    La interfaz pide 50. Un tope alto queda para la descarga explícita de una hora o un día.
+    La interfaz pide 40 y muestra 20. Un tope alto queda para la descarga explícita.
     """
-    q = _history_query(session_id=session_id, addr=addr, ip=ip, date=None if hour else date)
+    q = _history_query(
+        session_id=session_id,
+        addr=addr,
+        ip=ip,
+        imei=imei,
+        date=None if hour else date,
+    )
     if hour:
         try:
             start, end = homo.history_window(hour)

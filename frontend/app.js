@@ -306,6 +306,8 @@
     btnRefreshArchive: document.getElementById("btnRefreshArchive"),
     btnExportArchive: document.getElementById("btnExportArchive"),
     archiveExportKind: document.getElementById("archiveExportKind"),
+    historyCode: document.getElementById("historyCode"),
+    archiveCode: document.getElementById("archiveCode"),
     archiveDir: document.getElementById("archiveDir"),
     archiveType: document.getElementById("archiveType"),
     archiveView: document.getElementById("archiveView"),
@@ -320,6 +322,11 @@
     emptySent: document.getElementById("emptySent"),
     sentStatus: document.getElementById("sentStatus"),
     sentSource: document.getElementById("sentSource"),
+    sentCode: document.getElementById("sentCode"),
+    sentFrom: document.getElementById("sentFrom"),
+    sentTo: document.getElementById("sentTo"),
+    sentSummary: document.getElementById("sentSummary"),
+    sentPager: document.getElementById("sentPager"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
@@ -364,6 +371,7 @@
     cfgEnabled: document.getElementById("cfgEnabled"),
     cfgUnit: document.getElementById("cfgUnit"),
     cfgMeta: document.getElementById("cfgMeta"),
+    ctlDevice: document.getElementById("ctlDevice"),
     ctlSetpoint: document.getElementById("ctlSetpoint"),
     ctlBand: document.getElementById("ctlBand"),
     ctlGap: document.getElementById("ctlGap"),
@@ -430,8 +438,9 @@
   const homoByHour = new Map();
   let homoConfigured = false;
   let homoScanCount = 0;
-  const PAGE_SIZE = 50;
-  const QUICK_LIMIT = 100;
+  const PAGE_SIZE = 20;
+  const PREFETCH = 40;
+  const QUICK_LIMIT = 40;
   /** @type {Array<{hour:string,count:number,rx:number,tx:number}>} */
   let historyHourIndex = [];
   /** @type {Map<string, {rows:object[], skip:number, total:number, loading:boolean}>} */
@@ -440,7 +449,7 @@
   let archiveHourIndex = [];
   /** @type {Map<string, {rows:object[], skip:number, total:number, loading:boolean}>} */
   const archiveHourData = new Map();
-  let archiveRecent = { rows: [], skip: 0, total: 0, loading: false };
+  let archiveRecent = { rows: [], skip: 0, total: 0, shown: 0, loading: false, loaded: false };
 
   function setWsState(ok) {
     els.wsDot.classList.toggle("on", ok);
@@ -920,7 +929,8 @@
   }
 
   function historyPageParams(dirEl, typeEl, extra) {
-    const p = historyQueryParams();
+    const codeEl = dirEl === els.archiveDir ? els.archiveCode : els.historyCode;
+    const p = historyQueryParams(codeEl);
     if (dirEl && dirEl.value !== "all") p.set("direction", dirEl.value);
     if (typeEl && typeEl.value !== "all") p.set("value_type", typeEl.value);
     if (extra) {
@@ -945,10 +955,28 @@
     return rows.filter(pass);
   }
 
-  function pagerLabel(skip, total) {
-    if (skip >= total) return "";
-    if (skip < Math.min(QUICK_LIMIT, total)) return "Siguientes 50";
-    return "Cargar más de la base";
+  function pagerLabel(block) {
+    const shown = block.shown || 0;
+    const have = (block.rows || []).length;
+    const total = block.total || have;
+    if (shown < have) return `Siguientes ${Math.min(PAGE_SIZE, have - shown)}`;
+    if ((block.skip || 0) < total) return "Cargar más de la base";
+    return "";
+  }
+
+  function visibleRows(block) {
+    const shown = block.shown || 0;
+    if (!shown || !block.rows) return [];
+    return block.rows.slice(Math.max(0, block.rows.length - shown));
+  }
+
+  function applyHistoryPage(cur, got) {
+    const before = cur.rows.length;
+    cur.rows = got.rows.concat(cur.rows);
+    cur.skip += got.rows.length;
+    cur.total = got.total;
+    cur.loaded = true;
+    cur.shown = before === 0 ? Math.min(PAGE_SIZE, cur.rows.length) : cur.rows.length;
   }
 
   async function exportHistory(kind, hourRows, hourKeyValue) {
@@ -1135,9 +1163,11 @@
     }
   }
 
-  function historyQueryParams() {
+  function historyQueryParams(codeEl) {
     const p = new URLSearchParams();
-    if (selected && selected.addr) p.set("addr", selected.addr);
+    const code = codeEl && codeEl.value.trim();
+    if (code) p.set("imei", code);
+    else if (selected && selected.addr) p.set("addr", selected.addr);
     return p;
   }
 
@@ -1173,7 +1203,7 @@
   }
 
   async function scanHomologate(opts) {
-    const p = historyQueryParams();
+    const p = historyQueryParams(activeTab === "archive" ? els.archiveCode : els.historyCode);
     if (opts && opts.date) p.set("date", opts.date);
     if (opts && opts.hour) p.set("hour", opts.hour);
     if (els.homoQueueText) els.homoQueueText.textContent = "Explorando histórico…";
@@ -1260,7 +1290,7 @@
       `<th>Hora</th><th>Dir</th><th>Tipo</th>` +
       (showHex ? `<th>HEX</th>` : "") +
       (showAscii ? `<th>ASCII</th>` : "") +
-      `<th>Decimal</th><th>Dispositivo</th>` +
+      `<th>Decimal</th><th>Código</th><th>Dispositivo</th>` +
       `</tr></thead>`;
     const tbody = document.createElement("tbody");
     const ordered = [...msgs].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
@@ -1277,6 +1307,7 @@
         (showHex ? `<td class="mono hex">${esc(isHdr ? "—" : msg.hex || "—")}</td>` : "") +
         (showAscii ? `<td class="mono ascii">${esc(isHdr ? "—" : asciiOf(msg))}</td>` : "") +
         `<td class="mono val">${esc(isHdr ? "—" : decimalOf(msg))}</td>` +
+        `<td class="mono">${esc(msg.imei || "—")}</td>` +
         `<td class="mono muted">${esc(msg.addr || msg.ip || "")}</td>`;
       tbody.appendChild(tr);
     }
@@ -1291,12 +1322,10 @@
     const total = block.total || shown;
     const label = document.createElement("span");
     label.textContent = block.loading && shown === 0
-      ? "Cargando 50 tramas…"
-      : `${shown} de ${total}` + (shown > 0 && shown <= QUICK_LIMIT && total > QUICK_LIMIT
-        ? " · la vista rápida llega a 100"
-        : "");
+      ? "Cargando 40 tramas…"
+      : `${block.shown || 0} en pantalla · ${shown} cargadas de ${total}`;
     bar.appendChild(label);
-    const more = pagerLabel(block.skip, total);
+    const more = pagerLabel(block);
     if (more && !block.loading) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1315,8 +1344,15 @@
   async function loadHistoryHour(hour, reset) {
     let cur = historyHourData.get(hour);
     if (cur && cur.loading) return;
-    if (!cur || reset) cur = { rows: [], skip: 0, total: 0, loading: false, loaded: false };
+    if (!cur || reset) cur = { rows: [], skip: 0, total: 0, shown: 0, loading: false, loaded: false };
+    if (!reset && cur.shown < cur.rows.length) {
+      cur.shown = Math.min(cur.shown + PAGE_SIZE, cur.rows.length);
+      historyHourData.set(hour, cur);
+      renderHistory();
+      return;
+    }
     if (!reset && cur.loaded && cur.total && cur.skip >= cur.total) return;
+    const limit = cur.rows.length === 0 ? PREFETCH : PAGE_SIZE;
     cur.loading = true;
     historyHourData.set(hour, cur);
     renderHistory();
@@ -1325,14 +1361,11 @@
       const got = await fetchHistoryMessages(
         historyPageParams(els.filterDir, els.filterType, {
           hour,
-          limit: PAGE_SIZE,
+          limit,
           skip: cur.skip,
         })
       );
-      cur.rows = got.rows.concat(cur.rows);
-      cur.skip += got.rows.length;
-      cur.total = got.total;
-      cur.loaded = true;
+      applyHistoryPage(cur, got);
     } catch (e) {
       error = e;
     } finally {
@@ -1349,7 +1382,7 @@
     const loaded = loadedRows(historyHourData, () => true).length;
     els.historyMeta.textContent =
       `${historyHourIndex.length} hora(s) en índice` +
-      (loaded ? ` · ${loaded} trama(s) cargadas` : " · abre una hora para traer 50") +
+      (loaded ? ` · ${loaded} trama(s) cargadas` : " · abre una hora: 40 de la base, 20 en pantalla") +
       (selected ? ` · ${selected.addr}` : "");
     for (const info of historyHourIndex) {
       const hour = info.hour;
@@ -1398,7 +1431,7 @@
       section.appendChild(summary);
       if (block.rows.length) {
         const table = document.createElement("table");
-        fillCaptureTable(table, block.rows.filter(passesHistoryFilters), historyViewMode());
+        fillCaptureTable(table, visibleRows(block).filter(passesHistoryFilters), historyViewMode());
         section.appendChild(table);
       }
       appendHourPager(section, block, () => loadHistoryHour(hour, false));
@@ -1426,7 +1459,7 @@
     historyHourData.clear();
     openHours.clear();
     try {
-      const p = historyQueryParams();
+      const p = historyQueryParams(els.historyCode);
       p.set("limit", "24");
       const r = await fetch(`${API}/api/history/hours?${p.toString()}`);
       const data = await r.json();
@@ -1468,8 +1501,15 @@
   async function loadArchiveHour(hour, reset) {
     let cur = archiveHourData.get(hour);
     if (cur && cur.loading) return;
-    if (!cur || reset) cur = { rows: [], skip: 0, total: 0, loading: false, loaded: false };
+    if (!cur || reset) cur = { rows: [], skip: 0, total: 0, shown: 0, loading: false, loaded: false };
+    if (!reset && cur.shown < cur.rows.length) {
+      cur.shown = Math.min(cur.shown + PAGE_SIZE, cur.rows.length);
+      archiveHourData.set(hour, cur);
+      renderArchive();
+      return;
+    }
     if (!reset && cur.loaded && cur.total && cur.skip >= cur.total) return;
+    const limit = cur.rows.length === 0 ? PREFETCH : PAGE_SIZE;
     cur.loading = true;
     archiveHourData.set(hour, cur);
     renderArchive();
@@ -1478,14 +1518,11 @@
       const got = await fetchHistoryMessages(
         historyPageParams(els.archiveDir, els.archiveType, {
           hour,
-          limit: PAGE_SIZE,
+          limit,
           skip: cur.skip,
         })
       );
-      cur.rows = got.rows.concat(cur.rows);
-      cur.skip += got.rows.length;
-      cur.total = got.total;
-      cur.loaded = true;
+      applyHistoryPage(cur, got);
     } catch (e) {
       error = e;
     } finally {
@@ -1497,9 +1534,16 @@
 
   async function loadArchiveRecent(reset) {
     if (!archiveSelectedDate || archiveRecent.loading) return;
-    if (!reset && archiveRecent.total && archiveRecent.skip >= archiveRecent.total) return;
+    if (!archiveRecent.shown) archiveRecent.shown = 0;
+    if (!reset && archiveRecent.shown < archiveRecent.rows.length) {
+      archiveRecent.shown = Math.min(archiveRecent.shown + PAGE_SIZE, archiveRecent.rows.length);
+      renderArchive();
+      return;
+    }
+    if (!reset && archiveRecent.loaded && archiveRecent.total && archiveRecent.skip >= archiveRecent.total) return;
+    const limit = !archiveRecent.rows.length || reset ? PREFETCH : PAGE_SIZE;
     const skip = reset ? 0 : archiveRecent.skip;
-    if (reset) archiveRecent = { rows: [], skip: 0, total: 0, loading: true, loaded: false };
+    if (reset) archiveRecent = { rows: [], skip: 0, total: 0, shown: 0, loading: true, loaded: false };
     else archiveRecent.loading = true;
     renderArchive();
     let error = null;
@@ -1507,14 +1551,11 @@
       const got = await fetchHistoryMessages(
         historyPageParams(els.archiveDir, els.archiveType, {
           date: archiveSelectedDate,
-          limit: PAGE_SIZE,
+          limit,
           skip,
         })
       );
-      archiveRecent.rows = got.rows.concat(archiveRecent.rows);
-      archiveRecent.skip = skip + got.rows.length;
-      archiveRecent.total = got.total;
-      archiveRecent.loaded = true;
+      applyHistoryPage(archiveRecent, got);
     } catch (e) {
       error = e;
     } finally {
@@ -1538,8 +1579,8 @@
       return;
     }
     els.archiveMeta.textContent =
-      `${dayLabel} · ${archiveHourIndex.length} hora(s) · últimas ${archiveRecent.rows.length} de ${archiveRecent.total}` +
-      " · abre una hora para pedirla";
+      `${dayLabel} · ${archiveHourIndex.length} hora(s) · ${archiveRecent.shown || 0} en pantalla de ${archiveRecent.total}` +
+      " · el día no se carga entero";
 
     const recent = document.createElement("details");
     recent.className = "hour-block";
@@ -1556,7 +1597,7 @@
     recent.appendChild(recentSummary);
     if (archiveRecent.rows.length) {
       const table = document.createElement("table");
-      fillCaptureTable(table, archiveRecent.rows.filter(passesArchiveFilters), archiveViewMode());
+      fillCaptureTable(table, visibleRows(archiveRecent).filter(passesArchiveFilters), archiveViewMode());
       recent.appendChild(table);
     }
     appendHourPager(recent, archiveRecent, () => loadArchiveRecent(false));
@@ -1609,7 +1650,7 @@
       section.appendChild(summary);
       if (block.rows.length) {
         const table = document.createElement("table");
-        fillCaptureTable(table, block.rows.filter(passesArchiveFilters), archiveViewMode());
+        fillCaptureTable(table, visibleRows(block).filter(passesArchiveFilters), archiveViewMode());
         section.appendChild(table);
       }
       appendHourPager(section, block, () => loadArchiveHour(hour, false));
@@ -1653,10 +1694,10 @@
     setArchiveDateInput(dateKey);
     openArchiveHours.clear();
     archiveHourData.clear();
-    archiveRecent = { rows: [], skip: 0, total: 0, loading: false };
+    archiveRecent = { rows: [], skip: 0, total: 0, shown: 0, loading: false, loaded: false };
     els.archiveMeta.textContent = `Cargando índice de ${formatDayLabel(dateKey)}…`;
     try {
-      const p = historyQueryParams();
+      const p = historyQueryParams(els.archiveCode);
       p.set("date", dateKey);
       const r = await fetch(`${API}/api/history/hours?${p.toString()}`);
       const data = await r.json();
@@ -1983,6 +2024,7 @@
     renderHistory();
     for (const hour of open) loadHistoryHour(hour, true);
   }
+  if (els.historyCode) els.historyCode.addEventListener("change", () => loadHistory());
   els.filterDir.addEventListener("change", reloadHistoryFilter);
   els.filterType.addEventListener("change", reloadHistoryFilter);
   if (els.serialView) els.serialView.addEventListener("change", renderSerial);
@@ -2006,6 +2048,11 @@
     }
     loadArchiveRecent(true).then(() => {
       for (const hour of open) loadArchiveHour(hour, true);
+    });
+  }
+  if (els.archiveCode) {
+    els.archiveCode.addEventListener("change", () => {
+      if (archiveSelectedDate) loadArchiveDay(archiveSelectedDate);
     });
   }
   els.archiveDir.addEventListener("change", reloadArchiveFilter);
@@ -2034,23 +2081,76 @@
     if (st === "error") return "Error";
     if (st === "queued") return "En cola";
     if (st === "sending") return "Enviando";
+    if (st === "disabled") return "No enviado";
     return st || "—";
   }
 
-  function renderSent(items, meta) {
+  let sentRows = [];
+  let sentShown = 0;
+  let sentSkip = 0;
+  let sentMore = false;
+
+  function sentQuery(limit, skip) {
+    const p = new URLSearchParams();
+    if (els.sentSource && els.sentSource.value !== "all") p.set("source", els.sentSource.value);
+    if (els.sentStatus && els.sentStatus.value !== "all") p.set("status", els.sentStatus.value);
+    if (els.sentCode && els.sentCode.value.trim()) p.set("code", els.sentCode.value.trim());
+    if (els.sentFrom && els.sentFrom.value) p.set("date_from", els.sentFrom.value);
+    if (els.sentTo && els.sentTo.value) p.set("date_to", els.sentTo.value);
+    p.set("limit", String(limit));
+    p.set("skip", String(skip));
+    return p;
+  }
+
+  function renderSentSummary(days) {
+    if (!els.sentSummary) return;
+    els.sentSummary.innerHTML = "";
+    if (!days || !days.length) return;
+    const table = document.createElement("table");
+    table.className = "capture-table";
+    table.innerHTML =
+      "<thead><tr><th>Día</th><th>Código</th><th>Enviados</th><th>No enviados</th></tr></thead>";
+    const body = document.createElement("tbody");
+    for (const day of days) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td class="mono">${esc(day.date || "—")}</td>` +
+        `<td class="mono">${esc(day.i || "—")}</td>` +
+        `<td class="mono">${esc(day.ok || 0)}</td>` +
+        `<td class="mono">${esc(day.error || 0)}</td>`;
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+    els.sentSummary.appendChild(table);
+  }
+
+  async function loadSentSummary() {
+    const p = new URLSearchParams();
+    if (els.sentCode && els.sentCode.value.trim()) p.set("code", els.sentCode.value.trim());
+    if (els.sentFrom && els.sentFrom.value) p.set("date_from", els.sentFrom.value);
+    if (els.sentTo && els.sentTo.value) p.set("date_to", els.sentTo.value);
+    try {
+      const r = await fetch(`${API}/api/homologate/summary?${p}`);
+      const data = await r.json();
+      renderSentSummary(data.days || []);
+    } catch (_) {
+      renderSentSummary([]);
+    }
+  }
+
+  function renderSent(meta) {
     if (!els.sentBody) return;
+    const visible = sentRows.slice(0, sentShown);
     els.sentBody.innerHTML = "";
-    const statusF = (els.sentStatus && els.sentStatus.value) || "all";
-    const rows = (items || []).filter((it) => statusF === "all" || it.status === statusF);
-    els.emptySent.classList.toggle("show", rows.length === 0);
-    if (els.sentCount) els.sentCount.textContent = String(rows.length);
+    els.emptySent.classList.toggle("show", visible.length === 0);
+    if (els.sentCount) els.sentCount.textContent = String(visible.length);
     if (els.sentMeta) {
       els.sentMeta.textContent =
-        `${rows.length} registro(s)` +
-        (meta && meta.ok != null ? ` · OK ${meta.ok} · error ${meta.errors} · cola ${meta.pending}` : "") +
+        `${sentShown} en pantalla · ${sentRows.length} cargadas` +
+        (meta && meta.ok != null ? ` · OK ${meta.ok} · no OK ${meta.errors} · cola ${meta.pending}` : "") +
         (meta && meta.host ? ` · ${meta.host}` : "");
     }
-    for (const it of rows) {
+    for (const it of visible) {
       const tr = document.createElement("tr");
       const payload = it.payload || {};
       const preview = payload.d02
@@ -2063,26 +2163,66 @@
         `<td class="mono">${esc(formatTs(it.ts))}</td>` +
         `<td><span class="type-badge src-${esc(it.source || "queue")}">${esc(sourceLabel(it.source))}</span></td>` +
         `<td><span class="type-badge st-${esc(it.status || "")}">${esc(statusLabel(it.status))}</span></td>` +
-        `<td class="mono">${esc(it.i || "—")}</td>` +
+        `<td class="mono">${esc(it.i || it.imei || "—")}</td>` +
         `<td class="mono muted">${esc(it.hour || "—")}</td>` +
         `<td class="mono">${esc(it.http_status != null ? it.http_status : it.error || "—")}</td>` +
         `<td class="payload-cell"><details><summary>${esc(preview || "ver JSON")}</summary><pre>${esc(json)}</pre></details></td>`;
       els.sentBody.appendChild(tr);
     }
+    if (els.sentPager) {
+      els.sentPager.innerHTML = "";
+      const pending = sentShown < sentRows.length;
+      if (pending || sentMore) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn ghost";
+        btn.textContent = pending
+          ? `Siguientes ${Math.min(PAGE_SIZE, sentRows.length - sentShown)}`
+          : "Cargar más de la base";
+        btn.addEventListener("click", () => {
+          showMoreSent().catch((e) => {
+            if (els.sentMeta) els.sentMeta.textContent = String(e);
+          });
+        });
+        els.sentPager.appendChild(btn);
+      }
+    }
   }
 
-  async function loadSent() {
+  async function loadSent(reset) {
+    const first = reset !== false;
     if (els.sentMeta) els.sentMeta.textContent = "Cargando envíos…";
-    const p = new URLSearchParams();
-    if (els.sentSource && els.sentSource.value !== "all") p.set("source", els.sentSource.value);
-    p.set("limit", "500");
+    if (first) {
+      sentRows = [];
+      sentShown = 0;
+      sentSkip = 0;
+      sentMore = false;
+    }
+    const limit = first ? PREFETCH : PAGE_SIZE;
     try {
-      const r = await fetch(`${API}/api/homologate/sent?${p}`);
+      const r = await fetch(`${API}/api/homologate/sent?${sentQuery(limit, sentSkip)}`);
       const data = await r.json();
-      renderSent(data.items || [], data);
+      if (!r.ok) throw new Error(data.detail || "no se leyeron los envíos");
+      const incoming = data.items || [];
+      sentRows = sentRows.concat(incoming);
+      sentSkip += data.count != null ? data.count : incoming.length;
+      sentMore = !!data.more;
+      sentShown = first ? Math.min(PAGE_SIZE, sentRows.length) : sentRows.length;
+      renderSent(data);
+      if (first) loadSentSummary();
     } catch (e) {
       if (els.sentMeta) els.sentMeta.textContent = String(e);
     }
+  }
+
+  async function showMoreSent() {
+    if (sentShown < sentRows.length) {
+      sentShown = Math.min(sentShown + PAGE_SIZE, sentRows.length);
+      renderSent();
+      return;
+    }
+    if (!sentMore) return;
+    await loadSent(false);
   }
 
   els.btnHomoClear.addEventListener("click", async () => {
@@ -2094,9 +2234,12 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
-  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", loadSent);
-  if (els.sentStatus) els.sentStatus.addEventListener("change", loadSent);
-  if (els.sentSource) els.sentSource.addEventListener("change", loadSent);
+  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", () => loadSent(true));
+  if (els.sentStatus) els.sentStatus.addEventListener("change", () => loadSent(true));
+  if (els.sentSource) els.sentSource.addEventListener("change", () => loadSent(true));
+  if (els.sentCode) els.sentCode.addEventListener("change", () => loadSent(true));
+  if (els.sentFrom) els.sentFrom.addEventListener("change", () => loadSent(true));
+  if (els.sentTo) els.sentTo.addEventListener("change", () => loadSent(true));
 
   const MODE_ES = {
     chilled: "Refrigerado",
@@ -3132,10 +3275,6 @@
     els.cfgUrl.value = data.url || "";
     els.cfgEnabled.checked = !!data.enabled;
     els.cfgUnit.value = data.unit || "UNIT111";
-    if (els.ctlSetpoint) els.ctlSetpoint.value = data.setpoint ?? 130;
-    if (els.ctlBand) els.ctlBand.value = data.band_pct ?? 2;
-    if (els.ctlGap) els.ctlGap.value = data.gap_s ?? 120;
-    if (els.ctlEnabled) els.ctlEnabled.checked = !!data.control_enabled;
     if (els.cfgMeta) {
       els.cfgMeta.textContent = data.host
         ? `Destino actual: ${data.host}` + (data.enabled ? "" : " · envío apagado")
@@ -3173,6 +3312,7 @@
       const tr = document.createElement("tr");
       tr.innerHTML =
         `<td class="mono">${esc(formatTs(it.ts))}</td>` +
+        `<td class="mono">${esc(it.imei || "—")}</td>` +
         `<td class="mono">${esc(it.level)}</td>` +
         `<td class="mono">${esc(it.setpoint)}</td>` +
         `<td class="mono">${esc(it.error)}</td>` +
@@ -3209,10 +3349,47 @@
   }
 
   async function fetchControlLog(limit, skip) {
-    const r = await fetch(`${API}/api/control/log?limit=${limit}&skip=${skip}`);
+    const p = new URLSearchParams({ limit: String(limit), skip: String(skip) });
+    if (els.ctlDevice && els.ctlDevice.value) p.set("imei", els.ctlDevice.value);
+    const r = await fetch(`${API}/api/control/log?${p}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "no se leyó el control");
     return data;
+  }
+
+  let controlTargets = [];
+
+  function applyControlTarget() {
+    if (!els.ctlDevice) return;
+    const target = controlTargets.find((item) => item.imei === els.ctlDevice.value);
+    if (!target) return;
+    if (els.ctlSetpoint) els.ctlSetpoint.value = target.setpoint ?? 130;
+    if (els.ctlBand) els.ctlBand.value = target.band_pct ?? 2;
+    if (els.ctlGap) els.ctlGap.value = target.gap_s ?? 120;
+    if (els.ctlEnabled) els.ctlEnabled.checked = !!target.enabled;
+  }
+
+  async function loadControlTargets() {
+    const r = await fetch(`${API}/api/control/targets`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se leyeron los equipos");
+    controlTargets = data.items || [];
+    if (!els.ctlDevice) return;
+    const current = els.ctlDevice.value;
+    els.ctlDevice.innerHTML = "";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = controlTargets.length ? "Elige un código" : "Aún no hay códigos";
+    els.ctlDevice.appendChild(blank);
+    for (const target of controlTargets) {
+      const opt = document.createElement("option");
+      opt.value = target.imei;
+      opt.textContent = target.imei + (target.enabled ? " · activo" : "");
+      els.ctlDevice.appendChild(opt);
+    }
+    const keep = controlTargets.some((item) => item.imei === current);
+    els.ctlDevice.value = keep ? current : (controlTargets[0] ? controlTargets[0].imei : "");
+    applyControlTarget();
   }
 
   async function loadControl(keepWindow) {
@@ -3283,15 +3460,29 @@
   if (btnSaveControl) {
     btnSaveControl.addEventListener("click", async () => {
       try {
-        const data = await putSettings({
-          control_enabled: !!els.ctlEnabled.checked,
-          setpoint: Number(els.ctlSetpoint.value),
-          band_pct: Number(els.ctlBand.value),
-          gap_s: Number(els.ctlGap.value),
+        const imei = els.ctlDevice ? els.ctlDevice.value : "";
+        if (!imei) throw new Error("elige el código del equipo");
+        const r = await fetch(`${API}/api/control/targets`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imei,
+            enabled: !!els.ctlEnabled.checked,
+            setpoint: Number(els.ctlSetpoint.value),
+            band_pct: Number(els.ctlBand.value),
+            gap_s: Number(els.ctlGap.value),
+          }),
         });
-        els.ctlMeta.textContent = data.control_enabled
-          ? `Control activo · objetivo ${data.setpoint} · margen ${data.band_pct}% · espera ${data.gap_s}s · TX al llegar Server_Get`
-          : "Control apagado";
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || "no se guardó el equipo");
+        const known = controlTargets.find((item) => item.imei === imei);
+        if (known) Object.assign(known, data);
+        else controlTargets.push(data);
+        const opt = [...els.ctlDevice.options].find((item) => item.value === imei);
+        if (opt) opt.textContent = imei + (data.enabled ? " · activo" : "");
+        els.ctlMeta.textContent = data.enabled
+          ? `${imei} activo · objetivo ${data.setpoint} · margen ${data.band_pct}% · espera ${data.gap_s}s`
+          : `${imei} apagado · objetivo ${data.setpoint}`;
       } catch (e) {
         els.ctlMeta.textContent = String(e);
       }
@@ -3299,9 +3490,21 @@
   }
   const btnRefreshControl = document.getElementById("btnRefreshControl");
   if (btnRefreshControl) {
-    btnRefreshControl.addEventListener("click", () => loadControl(false).catch((e) => {
-      if (els.ctlMeta) els.ctlMeta.textContent = String(e);
-    }));
+    btnRefreshControl.addEventListener("click", () => {
+      loadControlTargets()
+        .then(() => loadControl(false))
+        .catch((e) => {
+          if (els.ctlMeta) els.ctlMeta.textContent = String(e);
+        });
+    });
+  }
+  if (els.ctlDevice) {
+    els.ctlDevice.addEventListener("change", () => {
+      applyControlTarget();
+      loadControl(false).catch((e) => {
+        if (els.ctlMeta) els.ctlMeta.textContent = String(e);
+      });
+    });
   }
   const btnExportControl = document.getElementById("btnExportControl");
   if (btnExportControl) {
@@ -3315,6 +3518,9 @@
   refreshSerial();
   refreshHomoQueue();
   loadSettings().catch((e) => { if (els.cfgMeta) els.cfgMeta.textContent = String(e); });
+  loadControlTargets()
+    .then(() => loadControl(false))
+    .catch((e) => { if (els.ctlMeta) els.ctlMeta.textContent = String(e); });
   setInterval(loadDevices, 10000);
   setInterval(() => {
       if (activeTab === "control" && !controlDeep) {

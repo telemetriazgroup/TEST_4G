@@ -1,11 +1,11 @@
-# TEST_4G — Monitor TCP 9917
+# TEST_4G — Monitor TCP 9918
 
-Puente TCP en **9917**, backend MongoDB, frontend tipo monitor serial (string/hex).
+Puente TCP en **9918**, backend MongoDB, frontend tipo monitor serial (string/hex). Varios equipos pueden estar conectados a la vez. El campo `imei` es el código que viene como prefijo de la trama; no se valida como IMEI.
 
 ## Arquitectura
 
 ```
-Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ──► MongoDB
+Equipo ──TCP:9918──► tcp_bridge ──HTTP──► backend ──► MongoDB
                               │                  │
                          HTTP:19802           WS + REST
                          (send/list)             │
@@ -16,8 +16,8 @@ Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ─�
 
 ## Cumple (contexto.md)
 
-1. `port_cleaner` libera el puerto **9917** al arrancar Compose.
-2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9917)`, `listen(10)`.
+1. `port_cleaner` libera el puerto **9918** al arrancar Compose.
+2. `tcp_server_loop`: `AF_INET`/`SOCK_STREAM`, `SO_REUSEADDR`, `bind(0.0.0.0, 9918)`, `listen(128)`.
 3. Cada `accept()` → hilo `handle_client`.
 4. Al arrancar: `POST /api/internal/disconnect_all`.
 5. Flujo: `register_pending` → `recv(4096)` → buffer → líneas (`\r\n`/`\n`/`\r`) → `parse_chunks` → backend.
@@ -26,7 +26,7 @@ Dispositivo ──TCP:9917──► tcp_bridge ──HTTP──► backend ─�
 
 ## Arranque (Docker)
 
-Esta rama es **`madurador_miami_30_10_2026`** (TCP **9917**, N=7, HTTP K=2: serial 19602 / backend 19702 / bridge 19802). Origen: `test-gasificado`. No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914), `test-tk` (9915), `test-gasificado` (9916) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
+Esta rama es **`madurador_miami_30_10_2026`**. Los equipos entran por TCP **9918**. La base sigue siendo `test_4g_9917` (volumen `mongo_data_9917`) para conservar el histórico. HTTP: serial 19602 / backend 19702 / bridge 19802. Origen: `test-gasificado`. No comparte puertos ni Mongo con `test_pollo` (9910), `test-saasa` (9911), `test-carne` (9912), `test-usa` (9913), `test-starcool` (9914), `test-tk` (9915), `test-gasificado` (9916) ni `test_usa_9921` (9921). Causas: [multiples_puertos.md](./multiples_puertos.md). Protocolo: [ram_tcp.md](./ram_tcp.md).
 
 ```bash
 docker compose up --build -d
@@ -38,7 +38,7 @@ docker compose up --build -d
 | Superadmin | http://localhost:19602 |
 | Backend    | http://localhost:19702 |
 | Bridge HTTP| http://localhost:19802 |
-| TCP equipos| `host:9917`       |
+| TCP equipos| `host:9918`       |
 | MongoDB    | localhost:29024   |
 
 ### Persistencia (MongoDB `test_4g_9917`)
@@ -63,7 +63,7 @@ curl 'http://localhost:19702/api/history?ip=1.2.3.4'
 ## Uso del monitor
 
 1. Abre http://localhost:19602
-2. Los equipos que abran TCP a `:9917` aparecen en la lista (solo conexiones reales).
+2. Los equipos que abran TCP a `:9918` aparecen en la lista (solo conexiones reales). El histórico, el archivo por día y el control se parten por el código `imei` de cada trama.
 3. Selecciona uno, mira RX en string/hex, envía comandos.
 4. **Limpiar huérfanas** fuerza el sweep si un equipo cambió de IP.
 

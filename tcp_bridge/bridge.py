@@ -1,5 +1,5 @@
 """
-tcp_bridge — servidor TCP puerto 9917.
+tcp_bridge — servidor TCP puerto 9918.
 
 Flujo:
   accept() → register_pending(addr, conn) → recv(4096) → buffer → líneas
@@ -31,7 +31,7 @@ from flask import Flask, jsonify, request
 # ---------------------------------------------------------------------------
 
 HOST = os.getenv("TCP_HOST", "0.0.0.0")
-TCP_PORT = int(os.getenv("TCP_PORT", "9917"))
+TCP_PORT = int(os.getenv("TCP_PORT", "9918"))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "19802"))
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:19702").rstrip("/")
 PENDING_FILE = os.getenv("PENDING_FILE", "/tmp/tcp_bridge_pending.jsonl")
@@ -130,6 +130,13 @@ def set_imei(key: str, imei: str) -> None:
     with _lock:
         if key in _conn_by_addr:
             _conn_by_addr[key]["imei"] = imei
+
+
+def get_imei(key: str) -> str | None:
+    with _lock:
+        meta = _conn_by_addr.get(key)
+        code = (meta or {}).get("imei")
+        return str(code) if code else None
 
 
 def set_session_id(key: str, session_id: str | None) -> None:
@@ -408,6 +415,7 @@ def notify_data(
     tcp_header: dict | None = None,
     frame_len: int | None = None,
     session_id: str | None = None,
+    imei: str | None = None,
 ) -> None:
     payload: dict[str, Any] = {
         "addr": addr,
@@ -431,6 +439,8 @@ def notify_data(
         payload["frame_len"] = frame_len
     if session_id:
         payload["session_id"] = session_id
+    if imei:
+        payload["imei"] = imei
     _backend_post("/api/internal/telemetry", payload)
 
 
@@ -497,6 +507,17 @@ def bytes_to_views(data: bytes) -> tuple[str, str]:
     return text, hex_str
 
 
+_CODE_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_-]{2,63}?)(?=\{|Server_Get|PGet|PPM:|SET_RELE\b)"
+)
+
+
+def identification_code(text: str | None) -> str:
+    """Prefijo de la trama. El nombre imei es el campo; no exige formato IMEI."""
+    match = _CODE_RE.match(str(text or "").lstrip())
+    return match.group(1) if match else ""
+
+
 def looks_like_ascii_hex(text: str) -> bool:
     cleaned = re.sub(r"[\s:]", "", text.strip())
     return (
@@ -512,6 +533,7 @@ def parse_chunks(line: str) -> dict[str, Any]:
     Prioridad: hex (ASCII o binario representado) → JSON → int → string.
     """
     raw = line.strip()
+    code = identification_code(raw)
     result: dict[str, Any] = {
         "raw": raw,
         "kind": "string",
@@ -522,6 +544,8 @@ def parse_chunks(line: str) -> dict[str, Any]:
         "text": raw,
         "payload_bytes": raw.encode("utf-8", errors="replace"),
     }
+    if code:
+        result["imei"] = code
 
     # Hex ASCII (objetivo principal de los equipos)
     hex_candidate = re.sub(r"[\s:]", "", raw)
@@ -564,7 +588,7 @@ def parse_chunks(line: str) -> dict[str, Any]:
                     "int_value": decimal_int,
                 }
             )
-            if isinstance(obj, dict):
+            if isinstance(obj, dict) and not result.get("imei"):
                 imei = obj.get("IMEI") or obj.get("imei") or obj.get("id")
                 if imei:
                     result["imei"] = str(imei)
@@ -643,8 +667,9 @@ def process_frame(
         value_type = parsed.get("value_type") or "hex"
         decimal = parsed.get("decimal")
         int_value = parsed.get("int_value")
-        if parsed.get("imei"):
-            set_imei(key, parsed["imei"])
+        frame_imei = str(parsed.get("imei") or "") or identification_code(text)
+        if frame_imei:
+            set_imei(key, frame_imei)
         if FORWARD_LEGACY and parsed.get("json") is not None and conn is not None:
             forward_legacy_json(parsed["json"], conn)
     else:
@@ -653,6 +678,9 @@ def process_frame(
         text = payload.decode("utf-8", errors="replace")
         value_type = "hex"
         decimal, int_value = bytes_to_decimal(payload)
+        frame_imei = identification_code(text)
+        if frame_imei:
+            set_imei(key, frame_imei)
 
     if decimal is None:
         decimal, maybe_int = bytes_to_decimal(raw_bytes)
@@ -679,6 +707,7 @@ def process_frame(
         tcp_header=header,
         frame_len=len(raw_bytes),
         session_id=get_session_id(key),
+        imei=frame_imei or None,
     )
 
 
@@ -786,7 +815,7 @@ def tcp_server_loop() -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((HOST, TCP_PORT))
-    srv.listen(10)
+    srv.listen(128)
     log.info("TCP escuchando en %s:%s", HOST, TCP_PORT)
 
     while True:
@@ -869,6 +898,7 @@ def send_to_device(
         tcp_header=header,
         frame_len=len(payload),
         session_id=get_session_id(target_key),
+        imei=get_imei(target_key),
     )
     return {
         "ok": True,
