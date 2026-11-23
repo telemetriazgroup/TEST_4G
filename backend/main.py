@@ -1934,7 +1934,7 @@ async def homologate_summary(
                         "$dateToString": {
                             "format": "%Y-%m-%d",
                             "date": {"$dateFromString": {"dateString": "$ts"}},
-                            "timezone": homo.env_tz(),
+                            "timezone": str(homo.env_tz()),
                         }
                     },
                     "i": "$i",
