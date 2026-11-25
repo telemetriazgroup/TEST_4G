@@ -114,6 +114,29 @@ def test_tk_response_splits_imei_and_blocks():
     }
 
 
+def test_tk_response_without_separator_still_splits():
+    """Equipo que pega el IMEI a 1B02. El ffffffff de 82A701 va dentro de la respuesta."""
+    d02 = parse_tk_rx(
+        "383639333837303635323736303431"
+        "1b0204000082a700d0fefe7f0effedfe3c018902ff7f2001fe7ffe7ffe7ffe7f"
+        "3900fe7ffe7ffe7fc3013c00010000000100fe7ffe7f0000000030031ee60100"
+        "3479000059cf4c00fe7ffe7fd0fe0efffe7f00000400de00fe7fff7f3d811b04"
+    )
+    d03 = parse_tk_rx(
+        "383639333837303635323736303431"
+        "1b0204000082a70100003cf63000030100fe00fe7ffe7ffe7ffe7f0807060000ffffffff1d981b04"
+    )
+    bare = parse_tk_rx("383639333837303635323736303431")
+    assert d02["imei"] == "869387065276041"
+    assert d02["opcode"] == "82a700"
+    assert d02["payload"].startswith("1b0204000082a700")
+    assert d03["imei"] == "869387065276041"
+    assert d03["opcode"] == "82a701"
+    assert d03["payload"].startswith("1b0204000082a701")
+    assert "ffffffff1d981b04" in d03["payload"]
+    assert bare == {"imei": "869387065276041", "payload": "", "opcode": None}
+
+
 def test_hour_key_lima():
     assert hour_key("2026-09-09T15:26:41.752381Z") == "2026-09-09 10:00"
     assert date_key("2026-09-09T15:26:41.752381Z") == "2026-09-09"
@@ -125,5 +148,6 @@ if __name__ == "__main__":
     test_rs_and_header_skipped()
     test_forma_b_does_not_map_alarm_to_d02()
     test_tk_response_splits_imei_and_blocks()
+    test_tk_response_without_separator_still_splits()
     test_hour_key_lima()
     print("ok")

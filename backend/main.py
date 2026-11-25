@@ -1683,7 +1683,7 @@ async def homologate_sent(
     limit: int = hnav.PAGE,
     skip: int = 0,
 ):
-    """Últimas 100 tramas enviadas, o un rango de fechas, de 100 en 100."""
+    """Últimas 20 tramas enviadas, o un rango de fechas, de 20 en 20."""
     if date and not date_from and not date_to:
         date_from = date_to = date
     q: dict[str, Any] = {}
@@ -2605,7 +2605,7 @@ async def get_history(
     limit: int = hnav.PAGE,
     skip: int = 0,
 ):
-    """Una página de 100 tramas. Sin hora, no descarga el día entero."""
+    """Una página de 20 tramas. Sin hora, no descarga el día entero."""
     limit, skip = hnav.clamp_page(limit, skip)
     q = _history_query(
         session_id=session_id,

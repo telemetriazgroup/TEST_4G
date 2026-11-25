@@ -1,4 +1,4 @@
-"""Consultas de histórico por día y por hora, de 100 en 100.
+"""Consultas de histórico por día y por hora, de 20 en 20.
 
 El día y la hora se guardan en America/Lima. Un recorte de los primeros
 10 caracteres del timestamp UTC deja el archivo del día vacío después de
@@ -12,7 +12,7 @@ from typing import Any
 
 from homologate import date_key, env_tz, hour_key
 
-PAGE = 100
+PAGE = 20
 RECENT_DAYS = 14
 
 

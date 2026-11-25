@@ -314,8 +314,7 @@
     sentSource: document.getElementById("sentSource"),
     sentFrom: document.getElementById("sentFrom"),
     sentTo: document.getElementById("sentTo"),
-    btnSentPrev: document.getElementById("btnSentPrev"),
-    btnSentNext: document.getElementById("btnSentNext"),
+    btnSentMore: document.getElementById("btnSentMore"),
     btnRefreshSent: document.getElementById("btnRefreshSent"),
     panelStatus: document.getElementById("panelStatus"),
     statusTitle: document.getElementById("statusTitle"),
@@ -409,9 +408,11 @@
   let archiveSkip = 0;
   let archiveTotal = 0;
   let archiveStale = false;
-  let sentSkip = 0;
+  let sentRows = [];
+  let sentDbSkip = 0;
   let sentTotal = 0;
-  const PAGE = 100;
+  let sentLoading = false;
+  const PAGE = 20;
   let statusSelectedDate = "";
   /** @type {Array<{date:string,count:number}>} */
   let statusDays = [];
@@ -1217,28 +1218,20 @@
     container.appendChild(table);
   }
 
-  function renderPager(container, skip, total, onMove) {
+  function renderMore(container, loaded, total, onMore) {
     const nav = document.createElement("div");
     nav.className = "page-nav";
-    const from = total ? skip + 1 : 0;
-    const to = Math.min(skip + PAGE, total);
     const label = document.createElement("span");
-    label.textContent = total ? `${from}–${to} de ${total}` : "0 tramas";
-    const prev = document.createElement("button");
-    prev.type = "button";
-    prev.className = "btn ghost";
-    prev.textContent = "◀ 100";
-    prev.disabled = skip <= 0;
-    prev.addEventListener("click", () => onMove(Math.max(0, skip - PAGE)));
-    const next = document.createElement("button");
-    next.type = "button";
-    next.className = "btn ghost";
-    next.textContent = "100 ▶";
-    next.disabled = skip + PAGE >= total;
-    next.addEventListener("click", () => onMove(skip + PAGE));
-    nav.appendChild(prev);
+    label.textContent = total ? `${loaded} de ${total}` : "0 tramas";
     nav.appendChild(label);
-    nav.appendChild(next);
+    if (loaded < total) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "btn ghost";
+      more.textContent = "Ver más";
+      more.addEventListener("click", () => onMore(loaded));
+      nav.appendChild(more);
+    }
     container.appendChild(nav);
   }
 
@@ -1249,7 +1242,7 @@
       ? `Sin tramas en los últimos días. Horas del último día con conexión: ${formatDayLabel(historyFallback)}.`
       : historyStale
         ? `${historyHours.length} hora(s). La más reciente no es de hoy.`
-        : `${historyHours.length} hora(s) con tramas. Abre una hora para ver 100.`;
+        : `${historyHours.length} hora(s) con tramas. Abre una hora: entran 20.`;
     els.historyMeta.textContent = note + (selected && selected.ip ? ` · ${selected.ip}` : "");
     els.emptyHistory.classList.toggle("show", historyHours.length === 0 && history.length === 0);
     for (const hour of historyHours) {
@@ -1262,7 +1255,6 @@
       box.appendChild(btn);
     }
     if (!historyOpen) return;
-    renderPager(box, historySkip, historyTotal, (skip) => openHistoryHour(historyOpen, skip));
     if (history.length) renderFrameTable(box, history, historyViewMode());
     else {
       const p = document.createElement("p");
@@ -1270,6 +1262,7 @@
       p.textContent = "Esa hora no tiene tramas con los filtros actuales.";
       box.appendChild(p);
     }
+    renderMore(box, history.length, historyTotal, (skip) => openHistoryHour(historyOpen, skip));
   }
 
   async function loadHistory() {
@@ -1293,9 +1286,10 @@
   }
 
   async function openHistoryHour(hour, skip) {
+    const append = skip > 0 && hour === historyOpen;
     historyOpen = hour;
     historySkip = skip;
-    els.historyMeta.textContent = `Cargando ${hour}…`;
+    els.historyMeta.textContent = append ? `Cargando 20 más de ${hour}…` : `Cargando ${hour}…`;
     try {
       const p = addFrameFilters(scopeParams(), els.filterDir, els.filterType);
       p.set("hour", hour);
@@ -1305,13 +1299,12 @@
       const r = await fetch(`${API}/api/history?${p}`);
       const data = await r.json();
       if (!r.ok) throw new Error(data.detail || "no se pudo leer la hora");
-      history = data.messages || [];
+      const rows = data.messages || [];
+      history = append ? history.concat(rows) : rows;
       historyTotal = data.total || 0;
       renderHistory();
-      const from = historyTotal ? skip + 1 : 0;
-      const to = Math.min(skip + history.length, historyTotal);
       els.historyMeta.textContent =
-        `${hour} · ${from}–${to} de ${historyTotal}` +
+        `${hour} · ${history.length} de ${historyTotal}` +
         (selected && selected.ip ? ` · ${selected.ip}` : "");
     } catch (e) {
       els.historyMeta.textContent = String(e);
@@ -1357,10 +1350,8 @@
     const where = archiveHour
       ? `Hora ${archiveHour}`
       : "Últimas tramas de ese día";
-    const from = archiveTotal ? archiveSkip + 1 : 0;
-    const to = Math.min(archiveSkip + archive.length, archiveTotal);
     els.archiveMeta.textContent =
-      `${staleNote}${where} · ${from}–${to} de ${archiveTotal}` +
+      `${staleNote}${where} · ${archive.length} de ${archiveTotal}` +
       (selected && selected.ip ? ` · ${selected.ip}` : "");
     for (const hour of archiveHours) {
       const btn = document.createElement("button");
@@ -1375,14 +1366,10 @@
       const back = document.createElement("button");
       back.type = "button";
       back.className = "btn ghost";
-      back.textContent = "Últimas 100 del día";
+      back.textContent = "Últimas del día";
       back.addEventListener("click", () => openArchiveTail(0));
       box.appendChild(back);
     }
-    renderPager(box, archiveSkip, archiveTotal, (skip) => {
-      if (archiveHour) openArchiveHour(archiveHour, skip);
-      else openArchiveTail(skip);
-    });
     if (archive.length) renderFrameTable(box, archive, archiveViewMode());
     else if (archiveTotal === 0) {
       const p = document.createElement("p");
@@ -1390,6 +1377,10 @@
       p.textContent = "Ese día no tiene tramas con los filtros actuales.";
       box.appendChild(p);
     }
+    renderMore(box, archive.length, archiveTotal, (skip) => {
+      if (archiveHour) openArchiveHour(archiveHour, skip);
+      else openArchiveTail(skip);
+    });
   }
 
   async function loadArchiveDays() {
@@ -1419,6 +1410,7 @@
   }
 
   async function openArchiveTail(skip) {
+    const append = skip > 0 && !archiveHour;
     archiveHour = "";
     archiveSkip = skip;
     const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
@@ -1429,12 +1421,14 @@
     const r = await fetch(`${API}/api/history?${p}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "no se pudo leer el día");
-    archive = data.messages || [];
+    const rows = [...(data.messages || [])].reverse();
+    archive = append ? archive.concat(rows) : rows;
     archiveTotal = data.total || 0;
     renderArchive();
   }
 
   async function openArchiveHour(hour, skip) {
+    const append = skip > 0 && hour === archiveHour;
     archiveHour = hour;
     archiveSkip = skip;
     const p = addFrameFilters(scopeParams(), els.archiveDir, els.archiveType);
@@ -1445,7 +1439,8 @@
     const r = await fetch(`${API}/api/history?${p}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "no se pudo leer la hora");
-    archive = data.messages || [];
+    const rows = data.messages || [];
+    archive = append ? archive.concat(rows) : rows;
     archiveTotal = data.total || 0;
     renderArchive();
   }
@@ -1821,20 +1816,29 @@
     return st || "—";
   }
 
-  function renderSent(items, meta) {
+  function sentKey(it) {
+    return [it.ts || "", it.i || "", it.status || "", it.http_status ?? "", it.error || "", it.source || ""].join("|");
+  }
+
+  function sentIsPending(it) {
+    return it.status === "queued" || it.status === "sending";
+  }
+
+  function renderSent(meta) {
     if (!els.sentBody) return;
     els.sentBody.innerHTML = "";
-    const statusF = (els.sentStatus && els.sentStatus.value) || "all";
-    const rows = (items || []).filter((it) => statusF === "all" || it.status === statusF);
-    els.emptySent.classList.toggle("show", rows.length === 0);
-    if (els.sentCount) els.sentCount.textContent = String(rows.length);
+    els.emptySent.classList.toggle("show", sentRows.length === 0);
+    if (els.sentCount) els.sentCount.textContent = String(sentTotal || sentRows.length);
     if (els.sentMeta) {
+      const range = (els.sentFrom && els.sentFrom.value) || (els.sentTo && els.sentTo.value)
+        ? ` · ${els.sentFrom.value || "…"} → ${els.sentTo.value || "…"}`
+        : "";
       els.sentMeta.textContent =
-        `${rows.length} registro(s)` +
-        (meta && meta.ok != null ? ` · OK ${meta.ok} · error ${meta.errors} · cola ${meta.pending}` : "") +
+        `${sentRows.length} en pantalla de ${sentTotal}${range}` +
         (meta && meta.host ? ` · ${meta.host}` : "");
     }
-    for (const it of rows) {
+    if (els.btnSentMore) els.btnSentMore.hidden = sentDbSkip >= sentTotal;
+    for (const it of sentRows) {
       const tr = document.createElement("tr");
       const payload = it.payload || {};
       const preview = payload.d02
@@ -1855,36 +1859,55 @@
     }
   }
 
-  async function loadSent() {
-    if (els.sentMeta) els.sentMeta.textContent = "Cargando envíos…";
+  async function fetchSentPage(skip) {
     const p = new URLSearchParams();
     if (els.sentSource && els.sentSource.value !== "all") p.set("source", els.sentSource.value);
     if (els.sentStatus && els.sentStatus.value !== "all") p.set("status", els.sentStatus.value);
     if (els.sentFrom && els.sentFrom.value) p.set("date_from", els.sentFrom.value);
     if (els.sentTo && els.sentTo.value) p.set("date_to", els.sentTo.value);
     p.set("limit", String(PAGE));
-    p.set("skip", String(sentSkip));
+    p.set("skip", String(skip));
+    const r = await fetch(`${API}/api/homologate/sent?${p}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "no se leyeron los envíos");
+    return data;
+  }
+
+  async function loadSent(mode) {
+    const kind = mode === "more" ? "more" : mode === "head" && sentRows.length ? "head" : "reset";
+    if (sentLoading) return;
+    sentLoading = true;
+    if (kind !== "head" && els.sentMeta) els.sentMeta.textContent = "Cargando envíos…";
     try {
-      const r = await fetch(`${API}/api/homologate/sent?${p}`);
-      const data = await r.json();
-      sentTotal = data.total || 0;
-      renderSent(data.items || [], data);
-      if (els.sentCount) els.sentCount.textContent = String(sentTotal);
-      if (els.sentMeta) {
-        const from = sentTotal ? sentSkip + 1 : 0;
-        const shown = (data.items || []).length;
-        const to = Math.min(sentSkip + shown, sentTotal || shown);
-        const range = (els.sentFrom && els.sentFrom.value) || (els.sentTo && els.sentTo.value)
-          ? ` · ${els.sentFrom.value || "…"} → ${els.sentTo.value || "…"}`
-          : " · últimas 100";
-        els.sentMeta.textContent =
-          `${from}–${to} de ${sentTotal}${range}` +
-          (data.host ? ` · ${data.host}` : "");
+      if (kind === "more") {
+        const data = await fetchSentPage(sentDbSkip);
+        const known = new Set(sentRows.map(sentKey));
+        const extra = (data.items || []).filter((it) => !known.has(sentKey(it)));
+        sentRows = sentRows.concat(extra);
+        sentDbSkip += Math.max(0, (data.count || 0) - (data.pending || 0));
+        sentTotal = data.total || 0;
+        renderSent(data);
+        return;
       }
-      if (els.btnSentPrev) els.btnSentPrev.disabled = sentSkip <= 0;
-      if (els.btnSentNext) els.btnSentNext.disabled = sentSkip + PAGE >= sentTotal;
+      const data = await fetchSentPage(0);
+      const incoming = data.items || [];
+      if (kind === "head") {
+        const known = new Set(sentRows.map(sentKey));
+        const fresh = incoming.filter((it) => !known.has(sentKey(it)));
+        if (fresh.length) {
+          sentRows = fresh.concat(sentRows);
+          sentDbSkip += fresh.filter((it) => !sentIsPending(it)).length;
+        }
+      } else {
+        sentRows = incoming;
+        sentDbSkip = incoming.filter((it) => !sentIsPending(it)).length;
+      }
+      sentTotal = data.total || 0;
+      renderSent(data);
     } catch (e) {
       if (els.sentMeta) els.sentMeta.textContent = String(e);
+    } finally {
+      sentLoading = false;
     }
   }
 
@@ -1897,34 +1920,12 @@
       if (els.homoQueueText) els.homoQueueText.textContent = String(e);
     }
   });
-  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", () => {
-    sentSkip = 0;
-    loadSent();
-  });
-  if (els.sentStatus) els.sentStatus.addEventListener("change", () => {
-    sentSkip = 0;
-    loadSent();
-  });
-  if (els.sentSource) els.sentSource.addEventListener("change", () => {
-    sentSkip = 0;
-    loadSent();
-  });
-  if (els.sentFrom) els.sentFrom.addEventListener("change", () => {
-    sentSkip = 0;
-    loadSent();
-  });
-  if (els.sentTo) els.sentTo.addEventListener("change", () => {
-    sentSkip = 0;
-    loadSent();
-  });
-  if (els.btnSentPrev) els.btnSentPrev.addEventListener("click", () => {
-    sentSkip = Math.max(0, sentSkip - PAGE);
-    loadSent();
-  });
-  if (els.btnSentNext) els.btnSentNext.addEventListener("click", () => {
-    sentSkip += PAGE;
-    loadSent();
-  });
+  if (els.btnRefreshSent) els.btnRefreshSent.addEventListener("click", () => loadSent("reset"));
+  if (els.sentStatus) els.sentStatus.addEventListener("change", () => loadSent("reset"));
+  if (els.sentSource) els.sentSource.addEventListener("change", () => loadSent("reset"));
+  if (els.sentFrom) els.sentFrom.addEventListener("change", () => loadSent("reset"));
+  if (els.sentTo) els.sentTo.addEventListener("change", () => loadSent("reset"));
+  if (els.btnSentMore) els.btnSentMore.addEventListener("click", () => loadSent("more"));
 
   const MODE_ES = {
     chilled: "Refrigerado",
@@ -2912,7 +2913,7 @@
 
   setInterval(refreshHomoQueue, 2000);
   setInterval(() => {
-    if (activeTab === "sent") loadSent();
+    if (activeTab === "sent") loadSent("head");
   }, 4000);
 
   els.btnSweep.addEventListener("click", async () => {

@@ -318,18 +318,27 @@ def tk_reply_opcode(payload: str | None) -> str | None:
 
 
 def parse_tk_rx(hex_str: str | None) -> dict[str, Any] | None:
-    """IMEI en ASCII-hex, separador ffffffff, y el bloque de respuesta del controlador."""
+    """IMEI en ASCII-hex y el bloque 1B02 del controlador.
+
+    Unos equipos separan el IMEI con ffffffff. Otros lo pegan directo a 1B02
+    y el ffffffff que traen está dentro de la respuesta, no es el separador.
+    """
     blob = re.sub(r"[^0-9a-fA-F]", "", str(hex_str or "")).lower()
     if not blob:
         return None
     marker = "ffffffff"
     idx = blob.find(marker)
-    if idx >= 0 and idx % 2 == 0:
+    if idx > 0 and idx % 2 == 0:
         imei = _ascii_digits(blob[:idx])
-        payload = blob[idx + len(marker) :]
-        opcode = tk_reply_opcode(payload)
-        if imei or payload:
-            return {"imei": imei, "payload": payload, "opcode": opcode}
+        if imei:
+            payload = blob[idx + len(marker) :]
+            return {"imei": imei, "payload": payload, "opcode": tk_reply_opcode(payload)}
+    start = blob.find("1b02")
+    if start > 0 and start % 2 == 0:
+        imei = _ascii_digits(blob[:start])
+        if imei:
+            payload = blob[start:]
+            return {"imei": imei, "payload": payload, "opcode": tk_reply_opcode(payload)}
     imei = _ascii_digits(blob)
     if imei:
         return {"imei": imei, "payload": "", "opcode": None}
